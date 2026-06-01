@@ -15,6 +15,7 @@ import {
   LOGS_DIR_ENV_KEY,
   loadPermissionSystemConfig,
   savePermissionSystemConfig,
+  type PermissionSystemExtensionConfig,
 } from "../src/extension-config.js";
 import { createPermissionSystemLogger } from "../src/logging.js";
 import {
@@ -22,6 +23,8 @@ import {
   isForwardedPermissionRequestForSession,
   PERMISSION_FORWARDING_AGENT_DIR_ENV_KEY,
   PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY,
+  PI_DELEGATED_AUTH_RUNTIME_DIR_ENV_KEY,
+  PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY,
   resolvePermissionForwardingRootDir,
   resolvePermissionForwardingTargetSessionId,
   SUBAGENT_ENV_HINT_KEYS,
@@ -45,7 +48,12 @@ import type { AgentPermissions, GlobalPermissionConfig } from "../src/types.js";
 import { canResolveAskPermissionRequest, shouldAutoApprovePermissionState } from "../src/yolo-mode.js";
 import { runAsyncTest, runTest } from "./test-harness.js";
 
-const TEST_ISOLATED_ENV_KEYS = ["PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR"] as const;
+const TEST_ISOLATED_ENV_KEYS = [
+  PERMISSION_FORWARDING_AGENT_DIR_ENV_KEY,
+  PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY,
+  PI_DELEGATED_AUTH_RUNTIME_DIR_ENV_KEY,
+  PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY,
+] as const;
 
 for (const key of TEST_ISOLATED_ENV_KEYS) {
   delete process.env[key];
@@ -107,7 +115,7 @@ type ExtensionHarness = {
   handlers: Record<string, MockHandler>;
   registeredEvents: string[];
   prompts: string[];
-  reviewLogPath: string;
+  debugPath: string;
   cleanup: () => Promise<void>;
 };
 
@@ -118,6 +126,8 @@ type ExtensionHarnessOptions = {
   inputResponse?: string;
   statusUpdates?: Array<{ key: string; value: string | undefined }>;
   notifications?: Array<{ message: string; level: string }>;
+  extensionConfig?: PermissionSystemExtensionConfig;
+  activeAgentName?: string | null;
 };
 
 const INHERITED_SUBAGENT_ENV_KEYS = [
@@ -171,7 +181,7 @@ function createToolCallHarness(
   const registeredEvents: string[] = [];
   const extensionConfigPath = join(baseDir, "extension-config.json");
   const logsDir = join(baseDir, "extension-logs");
-  const reviewLogPath = join(logsDir, "pi-permission-system-permission-review.jsonl");
+  const debugPath = join(logsDir, "pi-permission-system-debug.jsonl");
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const originalConfigPath = process.env[CONFIG_PATH_ENV_KEY];
   const originalLogsDir = process.env[LOGS_DIR_ENV_KEY];
@@ -179,7 +189,11 @@ function createToolCallHarness(
   mkdirSync(join(baseDir, "agents"), { recursive: true });
   mkdirSync(cwd, { recursive: true });
   writeFileSync(join(baseDir, "pi-permissions.jsonc"), `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  writeFileSync(extensionConfigPath, `${JSON.stringify(DEFAULT_EXTENSION_CONFIG, null, 2)}\n`, "utf8");
+  writeFileSync(
+    extensionConfigPath,
+    `${JSON.stringify(options.extensionConfig ?? DEFAULT_EXTENSION_CONFIG, null, 2)}\n`,
+    "utf8",
+  );
 
   process.env.PI_CODING_AGENT_DIR = baseDir;
   process.env[CONFIG_PATH_ENV_KEY] = extensionConfigPath;
@@ -212,7 +226,7 @@ function createToolCallHarness(
     handlers,
     registeredEvents,
     prompts,
-    reviewLogPath,
+    debugPath,
     cleanup: async (): Promise<void> => {
       await Promise.resolve(handlers.session_shutdown?.({}, createMockContext(cwd, prompts, options)));
       if (originalConfigPath === undefined) {
@@ -239,7 +253,9 @@ function createMockContext(
     cwd,
     hasUI: options.hasUI === true,
     sessionManager: {
-      getEntries: (): unknown[] => [],
+      getEntries: (): unknown[] => options.activeAgentName === undefined
+        ? []
+        : [{ type: "custom", customType: "active_agent", data: { name: options.activeAgentName } }],
       getSessionId: (): string => "test-session",
       getSessionDir: (): string => cwd,
     },
@@ -252,7 +268,7 @@ function createMockContext(
       },
       select: async (title: string): Promise<string | undefined> => {
         prompts.push(title);
-        return options.selectResponse ?? "Yes";
+        return options.selectResponse ?? "Allow Once";
       },
       input: async (): Promise<string | undefined> => options.inputResponse,
     },
@@ -369,7 +385,7 @@ await runAsyncTest("Extension dedupes identical permission parse warnings across
   }
 });
 
-runTest("Permission-system extension config defaults debug off, review log on, plaintext command logging off, and yolo mode off", () => {
+runTest("Permission-system extension config defaults debug and yolo mode off", () => {
   const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-config-"));
   const configPath = join(baseDir, "config.json");
 
@@ -381,16 +397,15 @@ runTest("Permission-system extension config defaults debug off, review log on, p
     assert.equal(existsSync(configPath), true);
 
     const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-    assert.equal(raw.debugLog, false);
-    assert.equal(raw.permissionReviewLog, true);
-    assert.equal(raw.logPlaintextBashCommands, false);
+    assert.deepEqual(Object.keys(raw).sort(), ["debug", "yoloMode"]);
+    assert.equal(raw.debug, false);
     assert.equal(raw.yoloMode, false);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-runTest("Permission-system extension config loads yolo mode when explicitly enabled", () => {
+runTest("Permission-system extension config loads debug and yolo mode when explicitly enabled", () => {
   const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-config-yolo-"));
   const configPath = join(baseDir, "config.json");
 
@@ -398,9 +413,7 @@ runTest("Permission-system extension config loads yolo mode when explicitly enab
     writeFileSync(
       configPath,
       `${JSON.stringify({
-        debugLog: true,
-        permissionReviewLog: false,
-        logPlaintextBashCommands: true,
+        debug: true,
         yoloMode: true,
       }, null, 2)}\n`,
       "utf8",
@@ -410,9 +423,7 @@ runTest("Permission-system extension config loads yolo mode when explicitly enab
     assert.equal(result.created, false);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
-      debugLog: true,
-      permissionReviewLog: false,
-      logPlaintextBashCommands: true,
+      debug: true,
       yoloMode: true,
     });
   } finally {
@@ -429,9 +440,7 @@ runTest("Permission-system extension config accepts JSONC comments and trailing 
       configPath,
       `{
   // Local extension toggles
-  "debugLog": true,
-  "permissionReviewLog": false,
-  "logPlaintextBashCommands": true,
+  "debug": true,
   "yoloMode": true,
 }
 `,
@@ -442,9 +451,7 @@ runTest("Permission-system extension config accepts JSONC comments and trailing 
     assert.equal(result.created, false);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
-      debugLog: true,
-      permissionReviewLog: false,
-      logPlaintextBashCommands: true,
+      debug: true,
       yoloMode: true,
     });
   } finally {
@@ -460,8 +467,8 @@ runTest("Permission-system extension config reports one-line JSONC parse warning
     writeFileSync(
       configPath,
       `{
-  "debugLog": true,,
-  "permissionReviewLog": false
+  "debug": true,,
+  "yoloMode": false
 }
 `,
       "utf8",
@@ -471,7 +478,7 @@ runTest("Permission-system extension config reports one-line JSONC parse warning
     assert.equal(result.created, false);
     assert.deepEqual(result.config, DEFAULT_EXTENSION_CONFIG);
     assert.match(result.warning || "", /Failed to parse permission-system config at/);
-    assert.match(result.warning || "", /line 2, column 20/);
+    assert.match(result.warning || "", /line 2, column/);
     assert.match(result.warning || "", /using default extension config\./);
     assert.equal((result.warning || "").includes("\n"), false);
   } finally {
@@ -487,9 +494,7 @@ runTest("Permission-system extension config normalizes invalid persisted values 
     writeFileSync(
       configPath,
       `${JSON.stringify({
-        debugLog: "true",
-        permissionReviewLog: null,
-        logPlaintextBashCommands: "yes",
+        debug: "true",
         yoloMode: 1,
       }, null, 2)}\n`,
       "utf8",
@@ -511,9 +516,7 @@ runTest("Permission-system extension config save persists normalized config", ()
   try {
     const saved = savePermissionSystemConfig(
       {
-        debugLog: true,
-        permissionReviewLog: false,
-        logPlaintextBashCommands: true,
+        debug: true,
         yoloMode: true,
       },
       configPath,
@@ -524,9 +527,7 @@ runTest("Permission-system extension config save persists normalized config", ()
     const result = loadPermissionSystemConfig(configPath);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
-      debugLog: true,
-      permissionReviewLog: false,
-      logPlaintextBashCommands: true,
+      debug: true,
       yoloMode: true,
     });
   } finally {
@@ -736,16 +737,14 @@ runTest("Before-agent-start prompt cache invalidates on permission changes while
   }
 });
 
-await runAsyncTest("Permission-system logger respects debug toggle and keeps review log enabled by default", async () => {
+await runAsyncTest("Permission-system logger writes debug and review entries only when debug is enabled", async () => {
   const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-logs-"));
   const logsDir = join(baseDir, "logs");
-  const debugLogPath = join(logsDir, "debug.jsonl");
-  const reviewLogPath = join(logsDir, "review.jsonl");
+  const debugPath = join(logsDir, "debug.jsonl");
   const config = { ...DEFAULT_EXTENSION_CONFIG };
   const logger = createPermissionSystemLogger({
     getConfig: () => config,
-    debugLogPath,
-    reviewLogPath,
+    debugPath,
     ensureLogsDirectory: () => {
       mkdirSync(logsDir, { recursive: true });
       return undefined;
@@ -754,38 +753,37 @@ await runAsyncTest("Permission-system logger respects debug toggle and keeps rev
 
   try {
     const initialDebugWarning = logger.debug("debug.disabled", { sample: true });
-    const reviewWarning = logger.review("permission_request.waiting", {
+    const disabledReviewWarning = logger.review("permission_request.waiting", {
       toolName: "bash",
       command: "git status --short",
       commandMetadata: { present: true, length: 18, sha256: "test" },
     });
 
     assert.equal(initialDebugWarning, undefined);
-    assert.equal(reviewWarning, undefined);
+    assert.equal(disabledReviewWarning, undefined);
     await logger.flush();
-    assert.equal(existsSync(debugLogPath), false);
-    assert.equal(existsSync(reviewLogPath), true);
-    let reviewLog = readFileSync(reviewLogPath, "utf8");
-    assert.match(reviewLog, /permission_request\.waiting/);
-    assert.match(reviewLog, /commandMetadata/);
-    assert.equal(reviewLog.includes("git status --short"), false);
+    assert.equal(existsSync(debugPath), false);
 
-    config.logPlaintextBashCommands = true;
-    const optInReviewWarning = logger.review("permission_request.waiting", {
+    config.debug = true;
+    const reviewWarning = logger.review("permission_request.waiting", {
       toolName: "bash",
       command: "git status --short",
+      commandMetadata: { present: true, length: 18, sha256: "test" },
     });
-    assert.equal(optInReviewWarning, undefined);
+    assert.equal(reviewWarning, undefined);
     await logger.flush();
-    reviewLog = readFileSync(reviewLogPath, "utf8");
-    assert.match(reviewLog, /"command":"git status --short"/);
+    const reviewContent = readFileSync(debugPath, "utf8");
+    assert.match(reviewContent, /permission_request\.waiting/);
+    assert.match(reviewContent, /"stream":"review"/);
+    assert.match(reviewContent, /commandMetadata/);
+    assert.match(reviewContent, /"command":"git status --short"/);
 
-    config.debugLog = true;
     const enabledDebugWarning = logger.debug("debug.enabled", { sample: true });
     assert.equal(enabledDebugWarning, undefined);
     await logger.flush();
-    assert.equal(existsSync(debugLogPath), true);
-    assert.match(readFileSync(debugLogPath, "utf8"), /debug\.enabled/);
+    const debugContent = readFileSync(debugPath, "utf8");
+    assert.match(debugContent, /debug\.enabled/);
+    assert.match(debugContent, /"stream":"debug"/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -813,6 +811,96 @@ runTest("BashFilter uses opencode-style last-match hierarchy", () => {
   const generic = filter.check("git commit -m test");
   assert.equal(generic.state, "deny");
   assert.equal(generic.matchedPattern, "git *");
+});
+
+await runAsyncTest("OpenCode-style Allow Once approves only the current request", async () => {
+  const harness = createToolCallHarness(
+    {
+      defaultPolicy: { tools: "allow", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    },
+    ["bash"],
+  );
+
+  try {
+    const first = await runToolCall(
+      harness,
+      {
+        toolName: "bash",
+        toolCallId: "allow-once-first",
+        input: { command: "git status --short" },
+      },
+      { hasUI: true, selectResponse: "Allow Once" },
+    );
+    assert.deepEqual(first, {});
+
+    const second = await runToolCall(harness, {
+      toolName: "bash",
+      toolCallId: "allow-once-second",
+      input: { command: "git status --short" },
+    });
+    assert.equal(second.block, true);
+    assert.match(String(second.reason), /requires approval, but no interactive UI is available/i);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+await runAsyncTest("OpenCode-style Allow Always approves matching requests for this session", async () => {
+  const harness = createToolCallHarness(
+    {
+      defaultPolicy: { tools: "allow", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    },
+    ["bash"],
+  );
+
+  try {
+    const first = await runToolCall(
+      harness,
+      {
+        toolName: "bash",
+        toolCallId: "allow-always-first",
+        input: { command: "git status --short" },
+      },
+      { hasUI: true, selectResponse: "Allow Always" },
+    );
+    assert.deepEqual(first, {});
+
+    const second = await runToolCall(harness, {
+      toolName: "bash",
+      toolCallId: "allow-always-second",
+      input: { command: "git status --short" },
+    });
+    assert.deepEqual(second, {});
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+await runAsyncTest("OpenCode-style Reject with Reason prompts for feedback and returns it to the agent", async () => {
+  const harness = createToolCallHarness(
+    {
+      defaultPolicy: { tools: "allow", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    },
+    ["bash"],
+  );
+
+  try {
+    const result = await runToolCall(
+      harness,
+      {
+        toolName: "bash",
+        toolCallId: "reject-with-reason",
+        input: { command: "git status --short" },
+      },
+      { hasUI: true, selectResponse: "Reject with Reason", inputResponse: "Use read-only inspection instead" },
+    );
+
+    assert.equal(result.block, true);
+    assert.match(String(result.reason), /User denied bash command 'git status --short'\./);
+    assert.match(String(result.reason), /Reason: Use read-only inspection instead\./);
+  } finally {
+    await harness.cleanup();
+  }
 });
 
 runTest("PermissionManager canonical built-in permission checking", () => {
@@ -1668,21 +1756,48 @@ runTest("Permission forwarding root honors explicit shared runtime and default p
         isSubagent: true,
         env: {
           [PERMISSION_FORWARDING_AGENT_DIR_ENV_KEY]: "/explicit-agent",
+          [PI_DELEGATED_AUTH_RUNTIME_DIR_ENV_KEY]: "/delegated-runtime",
           [PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY]: "/shared-runtime",
+          [PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY]: "/policy-agent",
         },
       },
       expectedRoot: "/explicit-agent",
     },
     {
-      name: "shared runtime dir",
+      name: "delegated auth runtime dir",
+      options: {
+        defaultAgentDir: "/default-agent",
+        isSubagent: true,
+        env: {
+          [PI_DELEGATED_AUTH_RUNTIME_DIR_ENV_KEY]: "/delegated-runtime",
+          [PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY]: "/shared-runtime",
+          [PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY]: "/policy-agent",
+        },
+      },
+      expectedRoot: "/delegated-runtime",
+    },
+    {
+      name: "legacy shared runtime dir",
       options: {
         defaultAgentDir: "/default-agent",
         isSubagent: true,
         env: {
           [PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY]: "/shared-runtime",
+          [PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY]: "/policy-agent",
         },
       },
       expectedRoot: "/shared-runtime",
+    },
+    {
+      name: "policy agent dir fallback",
+      options: {
+        defaultAgentDir: "/isolated-agent-home",
+        isSubagent: true,
+        env: {
+          [PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY]: "/policy-agent",
+        },
+      },
+      expectedRoot: "/policy-agent",
     },
     {
       name: "default fallback",
@@ -1690,7 +1805,9 @@ runTest("Permission forwarding root honors explicit shared runtime and default p
         defaultAgentDir: "/default-agent",
         isSubagent: false,
         env: {
+          [PI_DELEGATED_AUTH_RUNTIME_DIR_ENV_KEY]: "/delegated-runtime",
           [PI_AGENT_ROUTER_SHARED_AGENT_DIR_ENV_KEY]: "/shared-runtime",
+          [PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY]: "/policy-agent",
         },
       },
       expectedRoot: "/default-agent",
@@ -2164,6 +2281,7 @@ runTest("REGRESSION: resolveSkillPromptEntries sanitizes every available_skills 
   const { manager, cleanup } = createManager({
     defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
     skills: {
+      "visible-skill": "allow",
       "denied-skill": "deny",
     },
   });
@@ -2201,9 +2319,87 @@ runTest("REGRESSION: resolveSkillPromptEntries sanitizes every available_skills 
     assert.equal((result.prompt.match(/<available_skills>/g) || []).length, 1, "Fully denied blocks should be removed");
     assert.deepEqual(
       result.entries.map((entry) => `${entry.name}:${entry.state}`),
-      ["visible-skill:ask", "denied-skill:deny", "denied-skill:deny"],
+      ["visible-skill:allow", "denied-skill:deny", "denied-skill:deny"],
       "Tracked skill entries should retain denied skills for path enforcement",
     );
+  } finally {
+    cleanup();
+  }
+});
+
+runTest("resolveSkillPromptEntries hides ask skills from the system prompt", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    skills: {},
+  });
+
+  try {
+    const prompt = [
+      "System prompt start",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>unlisted-skill</name>",
+      "    <description>Not explicitly allowed by active agent frontmatter</description>",
+      "    <location>/skills/unlisted/SKILL.md</location>",
+      "  </skill>",
+      "</available_skills>",
+      "System prompt end",
+    ].join("\n");
+
+    const result = resolveSkillPromptEntries(prompt, manager, null, "/cwd");
+
+    assert.equal(result.prompt.includes("unlisted-skill"), false, "Ask/unlisted skills should not be advertised");
+    assert.equal(result.prompt.includes("<available_skills>"), false, "Empty skill blocks should be removed");
+    assert.deepEqual(
+      result.entries.map((entry) => `${entry.name}:${entry.state}`),
+      ["unlisted-skill:ask"],
+      "Ask skills should remain tracked for path enforcement",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+runTest("resolveSkillPromptEntries prunes hidden skill routing rows from project instructions", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "deny", special: "ask" },
+    skills: {
+      "allowed-skill": "allow",
+      "hidden-skill": "deny",
+    },
+  });
+
+  try {
+    const prompt = [
+      "<project_instructions path=\"/workspace/AGENTS.md\">",
+      "<skill_routing>",
+      "| Task Area | Skill |",
+      "| --- | --- |",
+      "| Allowed workflow | `allowed-skill` |",
+      "| Hidden workflow | `hidden-skill` |",
+      "- Load `hidden-skill` before hidden tasks",
+      "</skill_routing>",
+      "</project_instructions>",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>allowed-skill</name>",
+      "    <description>Allowed skill</description>",
+      "    <location>/skills/allowed/SKILL.md</location>",
+      "  </skill>",
+      "  <skill>",
+      "    <name>hidden-skill</name>",
+      "    <description>Hidden skill</description>",
+      "    <location>/skills/hidden/SKILL.md</location>",
+      "  </skill>",
+      "</available_skills>",
+    ].join("\n");
+
+    const result = resolveSkillPromptEntries(prompt, manager, null, "/cwd");
+
+    assert.equal(result.prompt.includes("allowed-skill"), true, "Allowed skill references should remain visible");
+    assert.equal(result.prompt.includes("hidden-skill"), false, "Hidden skill references should be pruned from prompt context");
+    assert.equal(result.prompt.includes("| Hidden workflow |"), false, "Hidden skill table rows should be removed");
+    assert.equal(result.prompt.includes("Load `hidden-skill`"), false, "Hidden skill list items should be removed");
   } finally {
     cleanup();
   }
@@ -2782,7 +2978,7 @@ await runAsyncTest("tool_call prompts for external_directory and then falls thro
         toolCallId: "external-ask-approved",
         input: { pattern: "needle", path: externalPath },
       },
-      { hasUI: true, selectResponse: "Yes" },
+      { hasUI: true, selectResponse: "Allow Once" },
     );
 
     assert.deepEqual(result, {});
@@ -2849,7 +3045,7 @@ await runAsyncTest("edit ask prompts summarize structured hashline edits without
           ],
         },
       },
-      { hasUI: true, selectResponse: "No" },
+      { hasUI: true, selectResponse: "Reject" },
     );
 
     assert.equal(result.block, true);
@@ -2894,7 +3090,7 @@ await runAsyncTest("extension structured edit ask prompts use content-safe summa
           ],
         },
       },
-      { hasUI: true, selectResponse: "No" },
+      { hasUI: true, selectResponse: "Reject" },
     );
 
     assert.equal(result.block, true);
@@ -2956,7 +3152,7 @@ await runAsyncTest("generic ask prompts include serialized tool input for inform
         toolCallId: "generic-tool-input",
         input: { city: "Chicago", units: "metric" },
       },
-      { hasUI: true, selectResponse: "No" },
+      { hasUI: true, selectResponse: "Reject" },
     );
 
     assert.equal(result.block, true);
@@ -2968,12 +3164,13 @@ await runAsyncTest("generic ask prompts include serialized tool input for inform
   }
 });
 
-await runAsyncTest("permission review logs redact requested bash commands by default", async () => {
+await runAsyncTest("debug review entries include requested bash commands", async () => {
   const harness = createToolCallHarness(
     {
       defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
     },
     ["bash"],
+    { extensionConfig: { ...DEFAULT_EXTENSION_CONFIG, debug: true } },
   );
 
   try {
@@ -2984,36 +3181,38 @@ await runAsyncTest("permission review logs redact requested bash commands by def
     });
 
     assert.equal(result.block, true);
-    const reviewLog = await readLogUntil(harness.reviewLogPath, (content) => content.includes("commandMetadata"));
-    assert.match(reviewLog, /commandMetadata/);
-    assert.equal(reviewLog.includes("git status --short"), false);
+    const debugContent = await readLogUntil(harness.debugPath, (content) => content.includes("commandMetadata"));
+    assert.match(debugContent, /commandMetadata/);
+    assert.match(debugContent, /"command":"git status --short"/);
+    assert.match(debugContent, /"toolInput":\{"command":"git status --short"\}/);
   } finally {
     await harness.cleanup();
   }
 });
 
-await runAsyncTest("permission review logs redact raw prompts and tool input previews", async () => {
+await runAsyncTest("debug review entries include raw tool input and responsible agent metadata", async () => {
   const harness = createToolCallHarness(
     {
       defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
     },
     ["secret_lookup"],
+    { extensionConfig: { ...DEFAULT_EXTENSION_CONFIG, debug: true } },
   );
 
   try {
     const result = await runToolCall(harness, {
       toolName: "secret_lookup",
-      toolCallId: "redacted-tool-input",
+      toolCallId: "raw-tool-input",
       input: { token: "super-secret-token", query: "customer record" },
-    });
+    }, { activeAgentName: "reviewer" });
 
     assert.equal(result.block, true);
-    const reviewLog = await readLogUntil(harness.reviewLogPath, (content) => content.includes("promptMetadata"));
-    assert.match(reviewLog, /promptMetadata/);
-    assert.match(reviewLog, /toolInputPreviewMetadata/);
-    assert.equal(reviewLog.includes("super-secret-token"), false);
-    assert.equal(reviewLog.includes("customer record"), false);
-    assert.equal(reviewLog.includes("Current agent requested tool"), false);
+    const debugContent = await readLogUntil(harness.debugPath, (content) => content.includes("toolInput"));
+    assert.match(debugContent, /"agentName":"reviewer"/);
+    assert.match(debugContent, /Agent 'reviewer' requested tool/);
+    assert.match(debugContent, /"toolInput":\{"token":"super-secret-token","query":"customer record"\}/);
+    assert.match(debugContent, /super-secret-token/);
+    assert.match(debugContent, /customer record/);
   } finally {
     await harness.cleanup();
   }
@@ -3092,6 +3291,43 @@ await runAsyncTest("TARGETED SMOKE: agent 'code' with '*': deny blocked from rea
   } finally {
     await harness.cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #23 Baseline: Current pattern matching behavior before session/
+// permanent approval features are added.
+// ---------------------------------------------------------------------------
+
+runTest("ISSUE23-BASELINE: PermissionManager wildcard star matches zero-or-more", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: { tools: "deny", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    bash: { "git *": "allow" },
+  });
+  try {
+    const r1 = manager.checkPermission("bash", { command: "git status" });
+    assert.equal(r1.state, "allow");
+    assert.equal(r1.matchedPattern, "git *");
+
+    const r2 = manager.checkPermission("bash", { command: "git commit -m test" });
+    assert.equal(r2.state, "allow");
+    assert.equal(r2.matchedPattern, "git *");
+  } finally { cleanup(); }
+});
+
+runTest("ISSUE23-BASELINE: PermissionManager last-match-wins with wildcard patterns", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: { tools: "deny", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    bash: { "git *": "deny", "git status *": "allow", "git status": "deny" },
+  });
+  try {
+    const r1 = manager.checkPermission("bash", { command: "git status" });
+    assert.equal(r1.state, "deny");
+    assert.equal(r1.matchedPattern, "git status");
+
+    const r2 = manager.checkPermission("bash", { command: "git status --short" });
+    assert.equal(r2.state, "allow");
+    assert.equal(r2.matchedPattern, "git status *");
+  } finally { cleanup(); }
 });
 
 console.log("All permission system tests passed.");

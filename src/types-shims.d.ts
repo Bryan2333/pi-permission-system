@@ -83,9 +83,9 @@ declare module "node:url" {
   export function fileURLToPath(url: unknown): string;
 }
 
-declare module "bun:test" {
+declare module "node:test" {
   export const mock: {
-    module(name: string, factory: () => Record<string, unknown>): void;
+    module(name: string, options: { namedExports?: Record<string, unknown>; defaultExport?: unknown }): void;
   };
 }
 
