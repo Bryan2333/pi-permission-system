@@ -3,8 +3,7 @@ import { appendFile } from "node:fs/promises";
 import {
   EXTENSION_ID,
   ensurePermissionSystemLogsDirectory,
-  getPermissionSystemDebugLogPath,
-  getPermissionSystemReviewLogPath,
+  getPermissionSystemDebugPath,
   type PermissionSystemExtensionConfig,
 } from "./extension-config.js";
 
@@ -42,25 +41,12 @@ export interface PermissionSystemLogger {
 
 interface PermissionSystemLoggerOptions {
   getConfig: () => PermissionSystemExtensionConfig;
-  debugLogPath?: string;
-  reviewLogPath?: string;
+  debugPath?: string;
   ensureLogsDirectory?: () => string | undefined;
 }
 
-function redactReviewDetails(details: Record<string, unknown>): Record<string, unknown> {
-  if (typeof details.command !== "string") {
-    return details;
-  }
-
-  return {
-    ...details,
-    command: null,
-  };
-}
-
 export function createPermissionSystemLogger(options: PermissionSystemLoggerOptions): PermissionSystemLogger {
-  const getDebugLogPath = (): string => options.debugLogPath ?? getPermissionSystemDebugLogPath();
-  const getReviewLogPath = (): string => options.reviewLogPath ?? getPermissionSystemReviewLogPath();
+  const getDebugPath = (): string => options.debugPath ?? getPermissionSystemDebugPath();
   const ensureLogsDirectory = options.ensureLogsDirectory ?? (() => ensurePermissionSystemLogsDirectory());
   let writeQueue: Promise<void> = Promise.resolve();
 
@@ -74,7 +60,8 @@ export function createPermissionSystemLogger(options: PermissionSystemLoggerOpti
     });
   };
 
-  const writeLine = (stream: "debug" | "review", path: string, event: string, details: Record<string, unknown>): string | undefined => {
+  const writeLine = (stream: "debug" | "review", event: string, details: Record<string, unknown>): string | undefined => {
+    const path = getDebugPath();
     const directoryError = ensureLogsDirectory();
     if (directoryError) {
       return directoryError;
@@ -89,32 +76,30 @@ export function createPermissionSystemLogger(options: PermissionSystemLoggerOpti
         ...details,
       });
       if (!line) {
-        return `Failed to write permission-system ${stream} log '${path}': event could not be serialized.`;
+        return `Failed to write permission-system ${stream} entry '${path}': event could not be serialized.`;
       }
       enqueueAppend(path, line);
       return undefined;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return `Failed to write permission-system ${stream} log '${path}': ${message}`;
+      return `Failed to write permission-system ${stream} entry '${path}': ${message}`;
     }
   };
 
   const debug = (event: string, details: Record<string, unknown> = {}): string | undefined => {
-    if (!options.getConfig().debugLog) {
+    if (!options.getConfig().debug) {
       return undefined;
     }
 
-    return writeLine("debug", getDebugLogPath(), event, details);
+    return writeLine("debug", event, details);
   };
 
   const review = (event: string, details: Record<string, unknown> = {}): string | undefined => {
-    const config = options.getConfig();
-    if (!config.permissionReviewLog) {
+    if (!options.getConfig().debug) {
       return undefined;
     }
 
-    const reviewDetails = config.logPlaintextBashCommands ? details : redactReviewDetails(details);
-    return writeLine("review", getReviewLogPath(), event, reviewDetails);
+    return writeLine("review", event, details);
   };
 
   const flush = (): Promise<void> => writeQueue.catch(() => undefined);
