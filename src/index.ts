@@ -37,7 +37,10 @@ import {
   type ForwardedPermissionRequest,
   type ForwardedPermissionResponse,
   type PermissionForwardingLocation,
+import { evaluatePermission, type PatternPermissionRule } from "./evaluate-permission.js";
+import { PermanentApprovalStore } from "./permanent-approval-store.js";
 } from "./permission-forwarding.js";
+import { SessionApprovalStore } from "./session-approval-store.js";
 import { PermissionManager } from "./permission-manager.js";
 import {
   findSkillPathMatch,
@@ -57,6 +60,7 @@ import {
   type YoloModeControlResult,
 } from "./yolo-mode-api.js";
 import { registerModelOptionCompatibilityGuard } from "./model-option-compatibility.js";
+const PERMANENT_APPROVALS_PATH = join(PI_AGENT_DIR, "pi-permission-system-approvals.json");
 
 const PI_AGENT_DIR = getAgentDir();
 const SUBAGENT_SESSIONS_DIR = join(PI_AGENT_DIR, "subagent-sessions");
@@ -671,6 +675,79 @@ function createSensitiveLogMetadata(value: string | undefined): SensitiveLogMeta
     length: value.length,
     sha256: createHash("sha256").update(value).digest("hex"),
   };
+function getPatternApprovalSubject(result: PermissionCheckResult, input: unknown): string {
+  if (result.toolName === "bash" && result.command) {
+    return result.command;
+  }
+
+  if ((result.source === "mcp" || result.toolName === "mcp") && result.target) {
+    return result.target;
+  }
+
+  const path = getPathBearingToolPath(result.toolName, input);
+  if (path) {
+    return path;
+  }
+
+  return result.target || result.command || result.toolName;
+}
+
+function createConfigEvaluationRule(result: PermissionCheckResult): PatternPermissionRule {
+  const canReuseMatchedPattern = result.source === "bash" || result.source === "mcp" || result.source === "skill" || result.source === "special";
+  return {
+    tool: result.toolName,
+    pattern: canReuseMatchedPattern && result.matchedPattern ? result.matchedPattern : "*",
+    action: result.state,
+  };
+}
+
+function applyPatternApprovalState(
+  result: PermissionCheckResult,
+  input: unknown,
+  sessionApprovals: SessionApprovalStore,
+  permanentApprovals: PermanentApprovalStore,
+): PermissionCheckResult {
+  const subject = getPatternApprovalSubject(result, input);
+  const evaluated = evaluatePermission(
+    result.toolName,
+    subject,
+    [createConfigEvaluationRule(result)],
+    sessionApprovals.getRules(),
+    permanentApprovals.getRules(),
+  );
+
+  return {
+    ...result,
+    state: evaluated.action,
+    matchedPattern: evaluated.matchedPattern ?? result.matchedPattern,
+  };
+}
+
+function persistPatternApprovalDecision(
+  decision: PermissionPromptDecision,
+  result: PermissionCheckResult,
+  input: unknown,
+  sessionApprovals: SessionApprovalStore,
+): void {
+  if (!decision.approved) {
+    return;
+  }
+
+  const subject = getPatternApprovalSubject(result, input);
+  if (!subject) {
+    return;
+  }
+
+  if (decision.state === "always") {
+    sessionApprovals.approveAlways(result.toolName, subject);
+    return;
+  }
+
+  if (decision.state === "approved") {
+    sessionApprovals.approveAlways(result.toolName, subject);
+  }
+}
+
 }
 
 function getPermissionLogContext(
@@ -1339,6 +1416,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
 
     const result = loadPermissionSystemConfig();
+  const sessionApprovals = new SessionApprovalStore();
+  const permanentApprovals = new PermanentApprovalStore({ persistencePath: PERMANENT_APPROVALS_PATH });
     setExtensionConfig(result.config);
 
     if (runtimeContext?.hasUI) {
@@ -1733,7 +1812,16 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     // Use tool-level permission check for tool injection decisions
     // This ensures that agent-specific tool deny rules (e.g., bash: deny) are respected
     // before any command-level permissions are considered
-    const toolPermission = permissionManager.getToolPermission(toolName, agentName ?? undefined);
+    const toolPermission = applyPatternApprovalState(
+      {
+        toolName,
+        state: permissionManager.getToolPermission(toolName, agentName ?? undefined),
+        source: "tool",
+      },
+      {},
+      sessionApprovals,
+      permanentApprovals,
+    ).state;
     if (toolPermission !== "deny") {
       return true;
     }
@@ -1796,6 +1884,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     runtimeApi = null;
     invalidateAgentStartCache();
     stopForwardedPermissionPolling();
+    await ensureModelOptionCompatibilityRegistered();
+    sessionApprovals.clear();
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -1826,6 +1916,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     const promptStateCacheKey = createBeforeAgentStartPromptStateKey({
       agentName,
       cwd: ctx.cwd,
+    sessionApprovals.clear();
       permissionStamp: permissionManager.getPolicyCacheStamp(agentName ?? undefined),
       systemPrompt: event.systemPrompt,
       allowedToolNames: allowedTools,
@@ -2025,7 +2116,12 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       // state === "allow" → fall through to normal permission check
     }
 
-    const check = permissionManager.checkPermission(toolName, input, agentName ?? undefined);
+    const check = applyPatternApprovalState(
+      permissionManager.checkPermission(toolName, input, agentName ?? undefined),
+      input,
+      sessionApprovals,
+      permanentApprovals,
+    );
     const permissionLogContext = getPermissionLogContext(check, input);
 
     if (check.state === "deny") {
@@ -2081,3 +2177,4 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     return {};
   });
 }
+      persistPatternApprovalDecision(decision, check, input, sessionApprovals);
