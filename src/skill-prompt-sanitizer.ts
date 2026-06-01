@@ -178,6 +178,45 @@ function removePromptRange(prompt: string, start: number, end: number): string {
   return `${beforeSection}${afterSection}`;
 }
 
+function lineContainsBacktickedHiddenSkill(line: string, hiddenSkillNames: ReadonlySet<string>): boolean {
+  if (hiddenSkillNames.size === 0 || !line.includes("`")) {
+    return false;
+  }
+
+  for (const match of line.matchAll(/`([^`]+)`/g)) {
+    const skillName = decodeXml(match[1]?.trim() ?? "");
+    if (skillName && hiddenSkillNames.has(skillName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isStructuredSkillReferenceLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") || /^[-*+]\s+/.test(trimmed);
+}
+
+function pruneHiddenStructuredSkillReferences(prompt: string, hiddenSkillNames: ReadonlySet<string>): string {
+  if (hiddenSkillNames.size === 0) {
+    return prompt;
+  }
+
+  const lines = prompt.split("\n");
+  let removed = false;
+  const prunedLines = lines.filter((line) => {
+    if (isStructuredSkillReferenceLine(line) && lineContainsBacktickedHiddenSkill(line, hiddenSkillNames)) {
+      removed = true;
+      return false;
+    }
+
+    return true;
+  });
+
+  return removed ? prunedLines.join("\n").replace(/\n{3,}/g, "\n\n") : prompt;
+}
+
 export function resolveSkillPromptEntries(
   prompt: string,
   permissionManager: PermissionManager,
@@ -191,6 +230,7 @@ export function resolveSkillPromptEntries(
 
   const permissionCache = new Map<string, PermissionState>();
   const enforcementEntries: SkillPromptEntry[] = [];
+  const hiddenSkillNames = new Set<string>();
   const replacements: Array<{ start: number; end: number; content: string }> = [];
 
   for (const section of sections) {
@@ -200,7 +240,15 @@ export function resolveSkillPromptEntries(
     });
     enforcementEntries.push(...resolvedEntries);
 
-    const visibleSectionEntries = resolvedEntries.filter((entry) => entry.state !== "deny");
+    // The system prompt is an advertised capability list, so only fully allowed
+    // skills should be visible. Ask/deny skills remain tracked for read-path
+    // enforcement but are hidden to avoid context pollution.
+    const visibleSectionEntries = resolvedEntries.filter((entry) => entry.state === "allow");
+    for (const entry of resolvedEntries) {
+      if (entry.state !== "allow") {
+        hiddenSkillNames.add(entry.name);
+      }
+    }
 
     if (visibleSectionEntries.length === resolvedEntries.length) {
       continue;
@@ -213,10 +261,6 @@ export function resolveSkillPromptEntries(
     });
   }
 
-  if (replacements.length === 0) {
-    return { prompt, entries: enforcementEntries };
-  }
-
   let sanitizedPrompt = prompt;
   for (let i = replacements.length - 1; i >= 0; i--) {
     const replacement = replacements[i];
@@ -224,6 +268,8 @@ export function resolveSkillPromptEntries(
       ? `${sanitizedPrompt.slice(0, replacement.start)}${replacement.content}${sanitizedPrompt.slice(replacement.end)}`
       : removePromptRange(sanitizedPrompt, replacement.start, replacement.end);
   }
+
+  sanitizedPrompt = pruneHiddenStructuredSkillReferences(sanitizedPrompt, hiddenSkillNames);
 
   return {
     prompt: sanitizedPrompt,
