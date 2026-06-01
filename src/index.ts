@@ -103,6 +103,8 @@ type SensitiveLogMetadata = {
   length: number;
   sha256: string;
 };
+const FORWARDED_PERMISSION_PROMPT_TIMEOUT_MS = 30 * 1000;
+const FORWARDED_PERMISSION_PROMPT_TIMEOUT_REASON = "permission_timeout: forwarded permission prompt was not answered within 30 seconds.";
 
 const PERMISSION_REQUEST_EVENT_CHANNEL = "pi-permission-system:permission-request";
 const PATH_BEARING_TOOLS = new Set(["read", "write", "edit", "find", "grep", "ls"]);
@@ -1251,6 +1253,7 @@ async function processForwardedPermissionRequests(
     }),
   );
 
+    const requestAgeMs = Date.now() - request.createdAt;
   for (const { requestPath, request } of pendingRequests) {
     if (!request) {
       safeDeleteFile(requestPath, `${location.label} forwarded permission request`);
@@ -1275,8 +1278,19 @@ async function processForwardedPermissionRequests(
     };
 
     let decision: PermissionPromptDecision = { approved: false, state: "denied" };
-    if (shouldAutoApprovePermissionState("ask", extensionConfig)) {
-      writeReviewLog("forwarded_permission.auto_approved", forwardedPermissionLogDetails);
+    if (requestAgeMs >= PERMISSION_FORWARDING_TIMEOUT_MS) {
+      writeReviewEntry("forwarded_permission.expired", {
+        ...forwardedPermissionLogDetails,
+        requestAgeMs,
+        timeoutMs: PERMISSION_FORWARDING_TIMEOUT_MS,
+      });
+      decision = {
+        approved: false,
+        state: "denied",
+        denialReason: "permission_timeout: forwarded permission request expired before it could be displayed.",
+      };
+    } else if (shouldAutoApprovePermissionState("ask", extensionConfig)) {
+      writeReviewEntry("forwarded_permission.auto_approved", forwardedPermissionLogDetails);
       decision = { approved: true, state: "approved" };
     } else {
       writeReviewLog("forwarded_permission.prompted", forwardedPermissionLogDetails);
@@ -1284,7 +1298,15 @@ async function processForwardedPermissionRequests(
         decision = await requestPermissionDecisionFromUi(
           ctx.ui,
           "Permission Required (Subagent)",
-          formatForwardedPermissionPrompt(request),
+          [
+            formatForwardedPermissionPrompt(request),
+            "",
+            `This forwarded prompt auto-denies after ${Math.round(FORWARDED_PERMISSION_PROMPT_TIMEOUT_MS / 1000)} seconds if unanswered.`,
+          ].join("\n"),
+          {
+            timeoutMs: FORWARDED_PERMISSION_PROMPT_TIMEOUT_MS,
+            timeoutDenialReason: FORWARDED_PERMISSION_PROMPT_TIMEOUT_REASON,
+          },
         );
       } catch (error) {
         logPermissionForwardingError("Failed to show forwarded permission confirmation dialog", error);
@@ -1771,6 +1793,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         if (!normalizedFileName || normalizedFileName.endsWith(".json") || normalizedFileName.endsWith(".tmp")) {
           queueForwardedPermissionRequestScan();
         }
+      startPermissionForwardingFallbackTimer();
       });
       permissionForwardingWatcher.on("error", (error) => {
         logPermissionForwardingWarning(
@@ -1802,6 +1825,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     const fromSystemPrompt = getActiveAgentNameFromSystemPrompt(systemPrompt);
     if (fromSystemPrompt) {
       lastKnownActiveAgentName = fromSystemPrompt;
+    startPermissionForwardingFallbackTimer();
       return fromSystemPrompt;
     }
 
