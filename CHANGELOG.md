@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-01
+
+### Added
+- Added `SessionApprovalStore` for in-memory per-session permission approval tracking with `approveAlways`, `approveOnce`, `hasSessionApproval`, and `evaluate` methods.
+- Added `PermanentApprovalStore` for persistent approval rules with atomic file writes and last-match-wins evaluation, stored at `pi-permission-system-approvals.json`.
+- Added `evaluate-permission.ts` module with `evaluatePermission()` function that evaluates tool+command pairs against multiple rulesets with last-match-wins semantics.
+- Added forwarded permission prompt auto-denial timeout (30 seconds) so unanswered forwarded subagent prompts automatically deny instead of blocking indefinitely.
+- Added `Allow Once`/`Allow Always`/`Reject`/`Reject with Reason` permission decision options replacing the previous `Yes`/`No`/`No, provide reason` labels.
+- Added `PI_DELEGATED_AUTH_RUNTIME_DIR` and `PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR` environment variable support for resolving forwarded permission request directories when launched by delegated auth or policy agent routers.
+- Added notification warning when a forwarded subagent permission prompt is displayed.
+- Added automatic expiration of forwarded permission requests that exceed the 10-minute forwarding timeout before display.
+- Added pruning of hidden structured skill references (table rows and list items) from system prompts when the referenced skill name is not fully allowed.
+
+### Changed
+- Consolidated three separate logging options (`debugLog`, `permissionReviewLog`, `logPlaintextBashCommands`) into a single `debug` config toggle that writes both diagnostics and permission review entries to one `pi-permission-system-debug.jsonl` file.
+- Updated wildcard matcher to normalize backslashes to forward slashes on Windows, add case-insensitive matching on Windows, and support `?` single-character wildcards and trailing ` .*` optional-space patterns.
+- Skill prompt sanitizer now hides all non-allow skills (including `ask`) from the advertised available-skills section instead of only hiding `deny` skills.
+- Migrated test suite from Bun to Node.js with tsx and Node experimental test module mocks.
+- Widened Pi peer dependency compatibility to include `^0.77.0 || ^0.78.0`.
+- Replaced `PermissionDecisionState` values `approved`/`denied`/`denied_with_reason` with `once`/`always`/`reject` in the permission decision API.
+
+### Fixed
+- Fixed forwarded permission response directory resolution when subagents are launched by delegated auth or router components with isolated `PI_CODING_AGENT_DIR`.
+- Fixed wildcard matcher to correctly handle Windows backslash path separators in pattern matching.
+
 ## [0.6.0] - 2026-05-26
 
 ### Added
