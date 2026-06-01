@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.0] - 2026-05-22
 
 ### Added
-- Added `logPlaintextBashCommands` as an opt-in extension setting and settings-modal control; review logs redact raw bash command strings by default while retaining safe metadata.
+- Added an opt-in settings-modal control for plaintext bash command logging; review entries redact raw bash command strings by default while retaining safe metadata.
 - Added structured edit summaries for `replace`, `append`, `prepend`, `replace_text`, and `delete` payloads in permission prompts.
 - Added skill-read enforcement for direct `read` calls under global and project Pi skill directories by inferring the skill name from the requested path when prompt entries are absent.
 
@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Removed artifact validation that forced local runtime `config.json` values to match release defaults.
-- Restored requested bash command text in permission review log entries while keeping prompts and generic tool payload previews redacted.
+- Restored requested bash command text in permission review entries while keeping prompts and generic tool payload previews redacted.
 - Clarified last-declared-match wildcard precedence in the README and fixed wildcard-order examples/recipes so documented `tools` and `mcp` examples now match runtime behavior (thanks to @Nateowami for issue #17 and @gotgenes for the rule-order diagnosis).
 - Replaced the removed `session_switch` lifecycle subscription with a single supported `session_start` refresh path so session changes rebuild runtime permission state without duplicate handlers (thanks to @gotgenes for PR #11).
 - Removed stale README wording around exact-name tool matching and refreshed the documented architecture/module list to match the current extension layout.
@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.6] - 2026-04-28
 
 ### Added
-- Added bounded, sanitized tool input previews to permission review logs for non-bash/non-MCP tool calls, inspired by PR #10 from @DevkumarPatel.
+- Added bounded, sanitized tool input previews to permission review entries for non-bash/non-MCP tool calls, inspired by PR #10 from @DevkumarPatel.
 
 ### Changed
 - Reused the extension's safe JSON serialization path for generic tool approval previews so circular values and BigInts are summarized without raw full-input logging.
@@ -209,9 +209,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.1] - 2026-03-13
 
 ### Added
-- Extension configuration system (`config.json`) with `debugLog` and `permissionReviewLog` options
-- JSONL debug logging to `logs/pi-permission-system-debug.jsonl` when `debugLog` is enabled
-- JSONL permission review logging to `logs/pi-permission-system-permission-review.jsonl` for auditing
+- Extension configuration system (`config.json`) with local logging options
+- JSONL debug logging to the extension log directory when enabled
+- JSONL permission review entries for auditing
 - Permission request event emission on `pi-permission-system:permission-request` channel for external consumers
 - New `extension-config.ts` module for config file management and path resolution
 - New `logging.ts` module with `createPermissionSystemLogger` for structured log output
