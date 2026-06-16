@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-16
+
+### Added
+- Added resource-qualified path rules for path-bearing built-in tools (`read`, `write`, `edit`, `find`, `grep`, `ls`) using action-scoped `tools` keys such as `read:/home/alice/project/generated/*`.
+- Added resource-qualified `external_directory` rules using `external_directory:<normalized-path>/*` for specific outside-worktree directories.
+
+### Changed
+- Clarified that `Allow Once` approves only the current request, `Allow Always` records an explicit matching approval for the current session only, and plain `Reject` does not become a future default.
+- Clarified that YOLO/auto-response approvals do not create saved approval rules.
+
 ## [0.7.0] - 2026-06-01
 
 ### Added
