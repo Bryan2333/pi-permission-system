@@ -1,39 +1,44 @@
 import assert from "node:assert/strict";
-import { mock } from "node:test";
 
 import type { PermissionSystemExtensionConfig } from "../src/extension-config.js";
 import { runAsyncTest, runTest } from "./test-harness.js";
 
-mock.module("@earendil-works/pi-coding-agent", {
-  namedExports: {
-    getSettingsListTheme: () => ({}),
-  },
-});
+type BunModuleMock = {
+  module(specifier: string, factory: () => Record<string, unknown>): void;
+};
 
-mock.module("@earendil-works/pi-tui", {
-  namedExports: {
-    Box: class {},
-    Container: class {
-      addChild(): void {}
-      render(): string[] {
-        return [];
-      }
-      invalidate(): void {}
-    },
-    SettingsList: class {
-      handleInput(): void {}
-      updateValue(): void {}
-      render(): string[] {
-        return [];
-      }
-      invalidate(): void {}
-    },
-    Spacer: class {},
-    Text: class {},
-    truncateToWidth: (text: string) => text,
-    visibleWidth: (text: string) => text.length,
+async function registerBunModuleMock(specifier: string, factory: () => Record<string, unknown>): Promise<void> {
+  const bunTestModule = "bun:test";
+  const { mock } = (await import(bunTestModule)) as { mock: BunModuleMock };
+  mock.module(specifier, factory);
+}
+
+await registerBunModuleMock("@earendil-works/pi-coding-agent", () => ({
+  getSettingsListTheme: () => ({}),
+}));
+
+await registerBunModuleMock("@earendil-works/pi-tui", () => ({
+  Box: class {},
+  Container: class {
+    addChild(): void {}
+    render(): string[] {
+      return [];
+    }
+    invalidate(): void {}
   },
-});
+  SettingsList: class {
+    handleInput(): void {}
+    updateValue(): void {}
+    render(): string[] {
+      return [];
+    }
+    invalidate(): void {}
+  },
+  Spacer: class {},
+  Text: class {},
+  truncateToWidth: (text: string) => text,
+  visibleWidth: (text: string) => text.length,
+}));
 
 const { registerPermissionSystemCommand } = await import("../src/config-modal.js");
 
@@ -111,6 +116,7 @@ runTest("permission-system command exposes no subcommand completions", () => {
   const registeredDefinition = registerForTest({
     debug: false,
     yoloMode: false,
+    forwardedPromptTimeoutSeconds: 30,
   });
 
   assert.equal(registeredDefinition.getArgumentCompletions, undefined);
@@ -120,6 +126,7 @@ await runAsyncTest("permission-system command only opens the settings modal", as
   const config: PermissionSystemExtensionConfig = {
     debug: true,
     yoloMode: true,
+    forwardedPromptTimeoutSeconds: 30,
   };
   const registeredDefinition = registerForTest(config);
 
@@ -144,6 +151,7 @@ await runAsyncTest("permission-system command only opens the settings modal", as
   assert.deepEqual(config, {
     debug: true,
     yoloMode: true,
+    forwardedPromptTimeoutSeconds: 30,
   });
 });
 

@@ -1,6 +1,6 @@
 // Vendored from ../zellij-modal/index.ts to keep pi-permission-system standalone.
 // Keep this module in sync when upstream zellij-modal primitives change.
-import { getSettingsListTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import {
 	Box,
 	Container,
@@ -782,6 +782,18 @@ export class ZellijModal implements ZellijModalComponent {
 /**
  * Options for the pre-built settings modal content renderer.
  */
+type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
+
+function createSettingsListTheme(theme: Theme): SettingsListTheme {
+	return {
+		label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
+		value: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),
+		description: (text: string) => theme.fg("dim", text),
+		cursor: theme.fg("accent", "→ "),
+		hint: (text: string) => theme.fg("dim", text),
+	};
+}
+
 export interface SettingsModalOptions {
 	/** Modal heading. */
 	title: string;
@@ -830,7 +842,7 @@ export class ZellijSettingsModal implements ZellijModalContentRenderer {
 		this.settingsList = new SettingsList(
 			options.settings,
 			Math.min(Math.max(options.settings.length + 2, 6), 18),
-			getSettingsListTheme(),
+			createSettingsListTheme(this.theme),
 			(id: string, value: string) => {
 				this.options.onChange(id, value);
 			},

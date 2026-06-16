@@ -43,6 +43,26 @@ export function normalizePathForComparison(pathValue: string, cwd: string): stri
   return process.platform === "win32" ? normalizedAbsolutePath.toLowerCase() : normalizedAbsolutePath;
 }
 
+export function normalizePathResourceForPermission(pathValue: string, cwd: string): string {
+  const normalizedPath = normalizePathForComparison(pathValue, cwd).replaceAll("\\", "/");
+  if (!normalizedPath) {
+    return "";
+  }
+
+  const driveRootMatch = normalizedPath.match(/^([a-z]):\/+$/iu);
+  if (driveRootMatch?.[1]) {
+    return `${driveRootMatch[1].toLowerCase()}:/`;
+  }
+
+  if (/^\/+$/u.test(normalizedPath)) {
+    return "/";
+  }
+
+  return normalizedPath
+    .replace(/^([A-Z]):/u, (_, drive: string) => `${drive.toLowerCase()}:`)
+    .replace(/\/+$/u, "");
+}
+
 export function isPathWithinDirectory(pathValue: string, directory: string): boolean {
   if (!pathValue || !directory) {
     return false;

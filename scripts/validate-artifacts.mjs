@@ -58,9 +58,11 @@ validatePolicyExample(readJson("config/config.example.json"));
 const packageJson = readJson("package.json");
 assert(packageJson.scripts?.typecheck?.includes("tsc"), "package.json must expose a TypeScript typecheck script");
 assert(!packageJson.scripts?.build?.includes("--noCheck"), "package.json build must not disable TypeScript checks");
-assert(packageJson.engines?.bun === undefined, "package.json engines must not require Bun for tests");
-assert(packageJson.scripts?.test?.includes("tsx"), "package.json test script must use the Node.js-compatible tsx runner");
-assert(!packageJson.scripts?.test?.includes("bun "), "package.json test script must not invoke Bun");
+assert(typeof packageJson.engines?.bun === "string" && packageJson.engines.bun.length > 0, "package.json engines must require Bun for tests");
+assert(typeof packageJson.scripts?.test === "string", "package.json must expose a test script");
+assert(packageJson.scripts.test.includes("bun ./tests/permission-system.test.ts"), "package.json test script must run permission system tests with Bun");
+assert(packageJson.scripts.test.includes("bun ./tests/config-modal.test.ts"), "package.json test script must run config modal tests with Bun");
+assert(!packageJson.scripts.test.includes("tsx"), "package.json test script must not use the stale tsx runner");
 
 const readme = readFileSync(join(root, "README.md"), "utf8");
 assert(!readme.includes("tool_call_limit"), "README must not document unsupported special.tool_call_limit");

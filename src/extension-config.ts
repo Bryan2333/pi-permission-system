@@ -10,6 +10,7 @@ export const EXTENSION_ID = "pi-permission-system";
 export interface PermissionSystemExtensionConfig {
   debug: boolean;
   yoloMode: boolean;
+  forwardedPromptTimeoutSeconds: number | null;
 }
 
 export interface PermissionSystemConfigLoadResult {
@@ -26,6 +27,7 @@ export interface PermissionSystemConfigSaveResult {
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   debug: false,
   yoloMode: false,
+  forwardedPromptTimeoutSeconds: 30,
 };
 
 export function resolveExtensionRoot(moduleUrl = import.meta.url): string {
@@ -56,6 +58,7 @@ export function cloneDefaultConfig(): PermissionSystemExtensionConfig {
   return {
     debug: DEFAULT_EXTENSION_CONFIG.debug,
     yoloMode: DEFAULT_EXTENSION_CONFIG.yoloMode,
+    forwardedPromptTimeoutSeconds: DEFAULT_EXTENSION_CONFIG.forwardedPromptTimeoutSeconds,
   };
 }
 
@@ -65,9 +68,19 @@ function createDefaultConfigContent(): string {
 
 export function normalizePermissionSystemConfig(raw: unknown): PermissionSystemExtensionConfig {
   const record = toRecord(raw);
+  const rawTimeout = record.forwardedPromptTimeoutSeconds;
+  let forwardedPromptTimeoutSeconds: number | null = DEFAULT_EXTENSION_CONFIG.forwardedPromptTimeoutSeconds;
+
+  if (rawTimeout === null || rawTimeout === false) {
+    forwardedPromptTimeoutSeconds = null;
+  } else if (typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0) {
+    forwardedPromptTimeoutSeconds = rawTimeout;
+  }
+
   return {
     debug: record.debug === true,
     yoloMode: record.yoloMode === true,
+    forwardedPromptTimeoutSeconds,
   };
 }
 
