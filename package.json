@@ -1,6 +1,6 @@
 {
   "name": "pi-permission-system",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
   "main": "./index.ts",
@@ -22,7 +22,7 @@
     "build": "npm run typecheck",
     "lint": "npm run typecheck",
     "validate:artifacts": "node ./scripts/validate-artifacts.mjs",
-    "test": "bun ./tests/permission-system.test.ts && bun ./tests/config-modal.test.ts",
+    "test": "bun ./tests/permission-system.test.ts && bun ./tests/config-modal.test.ts && bun ./tests/edit-prompt-compaction-red.test.ts && bun ./tests/edit-decision-deduplication-red.test.ts",
     "check": "npm run lint && npm run validate:artifacts && npm run test"
   },
   "keywords": [
@@ -61,9 +61,9 @@
   },
   "peerDependencies": {
     "@sinclair/typebox": "^0.34.49",
-    "@earendil-works/pi-ai": "^0.74.0 || ^0.75.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0",
-    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0"
+    "@earendil-works/pi-ai": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0",
+    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1"
