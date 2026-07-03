@@ -1,14 +1,17 @@
-import { getAgentDir, isToolCallEventType, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, isToolCallEventType, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type BeforeAgentStartEvent, type InputEvent, type ResourcesDiscoverEvent, type SessionStartEvent, type ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, normalize, relative } from "node:path";
+import { basename, dirname, join, normalize, relative, resolve } from "node:path";
 
 import {
+  createPermissionSystemCommandHandler,
   getNonEmptyString,
   isPathWithinDirectory,
+  normalizeAgentName,
   normalizePathForComparison,
   normalizePathResourceForPermission,
+  PERMISSION_SYSTEM_COMMAND_DESCRIPTION,
   toRecord,
 } from "./common.js";
 import {
@@ -27,9 +30,11 @@ import {
   loadPermissionSystemConfig,
   normalizePermissionSystemConfig,
   savePermissionSystemConfig,
+  type PermissionSystemConfigLoadResult,
   type PermissionSystemExtensionConfig,
 } from "./extension-config.js";
 import { createPermissionSystemLogger, safeJsonStringify } from "./logging.js";
+import { isNodeErrorWithCode } from "./jsonc-config.js";
 import {
   createPermissionForwardingLocation,
   isForwardedPermissionRequestForSession,
@@ -44,7 +49,22 @@ import {
   type PermissionForwardingLocation,
 } from "./permission-forwarding.js";
 import { evaluatePermission, type PatternPermissionRule } from "./evaluate-permission.js";
-import { PermanentApprovalStore } from "./permanent-approval-store.js";
+import {
+  formatAskPrompt,
+  formatDenyReason,
+  formatExternalDirectoryAskPrompt,
+  formatExternalDirectoryDenyReason,
+  formatExternalDirectoryUserDeniedReason,
+  formatMissingToolNameReason,
+  formatSkillAskPrompt,
+  formatSkillPathAskPrompt,
+  formatSkillPathDenyReason,
+  formatToolInputForPrompt,
+  formatUnknownToolReason,
+  formatUserDeniedReason,
+  getStructuredEditPayloads,
+  hasStructuredEditPayload,
+} from "./permission-prompts.js";
 import { PermissionManager } from "./permission-manager.js";
 import { SessionApprovalStore } from "./session-approval-store.js";
 import {
@@ -66,18 +86,18 @@ import {
 } from "./yolo-mode-api.js";
 
 const PI_AGENT_DIR = getAgentDir();
-const PERMANENT_APPROVALS_PATH = join(PI_AGENT_DIR, "pi-permission-system-approvals.json");
 const SUBAGENT_SESSIONS_DIR = join(PI_AGENT_DIR, "subagent-sessions");
+
 let cachedSubagentEnvHint: { signature: string; value: boolean } | undefined;
 
 function hasSubagentEnvHint(): boolean {
-  const values = SUBAGENT_ENV_HINT_KEYS.map((key) => process.env[key]?.trim() ?? "");
+  const values = SUBAGENT_ENV_HINT_KEYS.map((key: string) => process.env[key]?.trim() ?? "");
   const signature = values.join("\u0000");
   if (cachedSubagentEnvHint?.signature === signature) {
     return cachedSubagentEnvHint.value;
   }
 
-  const value = values.some((entry) => entry.length > 0);
+  const value = values.some((entry: string) => entry.length > 0);
   cachedSubagentEnvHint = { signature, value };
   return value;
 }
@@ -87,10 +107,9 @@ const ACTIVE_AGENT_TAG_REGEX = /<active_agent\s+name=["']([^"']+)["'][^>]*>/i;
 type PermissionRequestSource = "tool_call" | "skill_input" | "skill_read";
 type PermissionRequestState = "waiting" | "approved" | "denied";
 
-type PermissionRequestEvent = {
+type PermissionRequestCommonFields = {
   requestId: string;
   source: PermissionRequestSource;
-  state: PermissionRequestState;
   message: string;
   toolCallId?: string;
   toolName?: string;
@@ -99,6 +118,10 @@ type PermissionRequestEvent = {
   command?: string;
   target?: string;
   toolInput?: unknown;
+};
+
+type PermissionRequestEvent = PermissionRequestCommonFields & {
+  state: PermissionRequestState;
   agentName?: string | null;
 };
 
@@ -108,19 +131,9 @@ type SensitiveLogMetadata = {
   sha256: string;
 };
 
-type PermissionPromptDetails = {
-  requestId: string;
-  source: PermissionRequestSource;
+type PermissionPromptDetails = PermissionRequestCommonFields & {
   agentName: string | null;
-  message: string;
-  toolCallId?: string;
-  toolName?: string;
-  skillName?: string;
-  path?: string;
-  command?: string;
   commandMetadata?: SensitiveLogMetadata | null;
-  target?: string;
-  toolInput?: unknown;
   resolution?: string;
   denialReason?: string;
   decisionPersistence?: string;
@@ -137,7 +150,6 @@ type CachedPermissionPromptDecision = {
 const PERMISSION_REQUEST_EVENT_CHANNEL = "pi-permission-system:permission-request";
 const DEFAULT_FORWARDED_PERMISSION_PROMPT_TIMEOUT_REASON = "permission_timeout: forwarded permission prompt was not answered within the configured timeout.";
 const PATH_BEARING_TOOLS = new Set(["read", "write", "edit", "find", "grep", "ls"]);
-const STRUCTURED_EDIT_OPERATION_NAMES = new Set(["replace", "append", "prepend", "replace_text", "delete"]);
 const FILESYSTEM_TOOL_NAME_SUFFIXES = ["read", "write", "edit", "find", "grep", "search", "list", "ls"] as const;
 const SKILLS_DIR_PARTS = [".pi", "agent", "skills"] as const;
 const DUPLICATE_PERMISSION_PROMPT_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -168,39 +180,25 @@ function reportLoggingWarning(message: string): void {
   loggingWarningReporter(message);
 }
 
-function writeDebugEntry(event: string, details: Record<string, unknown> = {}): void {
-  const warning = extensionLogger.debug(event, details);
+function writeLogEntry(
+  stream: "debug" | "review",
+  event: string,
+  details: Record<string, unknown> = {},
+): void {
+  const warning = stream === "debug"
+    ? extensionLogger.debug(event, details)
+    : extensionLogger.review(event, details);
   if (warning) {
     reportLoggingWarning(warning);
   }
+}
+
+function writeDebugEntry(event: string, details: Record<string, unknown> = {}): void {
+  writeLogEntry("debug", event, details);
 }
 
 function writeReviewEntry(event: string, details: Record<string, unknown> = {}): void {
-  const warning = extensionLogger.review(event, details);
-  if (warning) {
-    reportLoggingWarning(warning);
-  }
-}
-
-function getStructuredEditPayloads(inputRecord: Record<string, unknown>): unknown[] {
-  if (Array.isArray(inputRecord.edits)) {
-    return inputRecord.edits;
-  }
-
-  if (typeof inputRecord.oldText === "string" && typeof inputRecord.newText === "string") {
-    return [{ op: "replace_text", oldText: inputRecord.oldText, newText: inputRecord.newText }];
-  }
-
-  return [];
-}
-
-function hasStructuredEditPayload(inputRecord: Record<string, unknown>): boolean {
-  return getStructuredEditPayloads(inputRecord).some((edit) => {
-    const editRecord = toRecord(edit);
-    const op = typeof editRecord.op === "string" ? editRecord.op : "replace_text";
-    return STRUCTURED_EDIT_OPERATION_NAMES.has(op)
-      || (typeof editRecord.oldText === "string" && typeof editRecord.newText === "string");
-  });
+  writeLogEntry("review", event, details);
 }
 
 function isLikelyFilesystemToolName(toolName: string): boolean {
@@ -274,15 +272,6 @@ function getEventInput(event: unknown): unknown {
   return {};
 }
 
-function normalizeAgentName(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
 function getActiveAgentName(ctx: ExtensionContext): string | null {
   const entries = ctx.sessionManager.getEntries();
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -325,280 +314,12 @@ function getContextSystemPrompt(ctx: ExtensionContext): string | undefined {
   }
 
   try {
-    const systemPrompt = getSystemPrompt.call(ctx);
+    const systemPrompt: unknown = getSystemPrompt.call(ctx);
     return typeof systemPrompt === "string" ? systemPrompt : undefined;
   } catch (error) {
     logPermissionForwardingWarning("Failed to read context system prompt for forwarded permission metadata", error);
     return undefined;
   }
-}
-
-function formatMissingToolNameReason(): string {
-  return "Tool call was blocked because no tool name was provided. Use a registered tool name from pi.getAllTools().";
-}
-
-function formatUnknownToolReason(toolName: string, availableToolNames: readonly string[]): string {
-  const preview = availableToolNames.slice(0, 10);
-  const suffix = availableToolNames.length > preview.length ? ", ..." : "";
-  const availableList = preview.length > 0 ? `${preview.join(", ")}${suffix}` : "none";
-
-  const mcpHint = toolName === "mcp"
-    ? ""
-    : " If this was intended as an MCP server tool, call the registered 'mcp' tool when available (for example: {\"tool\":\"server:tool\"}).";
-
-  return `Tool '${toolName}' is not registered in this runtime and was blocked before permission checks.${mcpHint} Registered tools: ${availableList}.`;
-}
-
-function formatPermissionHardStopHint(result: PermissionCheckResult): string {
-  if ((result.source === "mcp" || result.toolName === "mcp") && result.target) {
-    return "Hard stop: this MCP permission denial is policy-enforced. Do not retry this target, do not run discovery/investigation to bypass it, and report the block to the user.";
-  }
-
-  return "Hard stop: this permission denial is policy-enforced. Do not retry or investigate bypasses; report the block to the user.";
-}
-
-function formatDenyReason(result: PermissionCheckResult, agentName?: string): string {
-  const parts: string[] = [];
-
-  if (agentName) {
-    parts.push(`Agent '${agentName}'`);
-  }
-
-  if ((result.source === "mcp" || result.toolName === "mcp") && result.target) {
-    parts.push(`is not permitted to run MCP target '${result.target}'`);
-  } else {
-    parts.push(`is not permitted to run '${result.toolName}'`);
-  }
-
-  if (result.command) {
-    parts.push(`command '${result.command}'`);
-  }
-
-  if (result.matchedPattern) {
-    parts.push(`(matched '${result.matchedPattern}')`);
-  }
-
-  return `${parts.join(" ")}. ${formatPermissionHardStopHint(result)}`;
-}
-
-function formatUserDeniedReason(result: PermissionCheckResult, denialReason?: string): string {
-  const base = (result.source === "mcp" || result.toolName === "mcp") && result.target
-    ? `User denied MCP target '${result.target}'.`
-    : result.toolName === "bash" && result.command
-      ? `User denied bash command '${result.command}'.`
-      : `User denied tool '${result.toolName}'.`;
-  const reasonSuffix = denialReason ? ` Reason: ${denialReason}.` : "";
-
-  return `${base}${reasonSuffix} ${formatPermissionHardStopHint(result)}`;
-}
-
-const TOOL_INPUT_PREVIEW_MAX_LENGTH = 200;
-const TOOL_TEXT_SUMMARY_MAX_LENGTH = 80;
-
-function truncateInlineText(value: string, maxLength: number): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
-}
-
-function sanitizeInlineText(value: string, maxLength = TOOL_TEXT_SUMMARY_MAX_LENGTH): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized ? truncateInlineText(normalized, maxLength) : "empty text";
-}
-
-function countTextLines(value: string): number {
-  if (!value) {
-    return 0;
-  }
-
-  return value.split(/\r\n|\r|\n/).length;
-}
-
-function formatCount(value: number, singular: string, plural: string): string {
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function getPromptPath(input: Record<string, unknown>): string | null {
-  return getNonEmptyString(input.path) ?? getNonEmptyString(input.file_path);
-}
-
-function countEditPayloadLines(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.filter((line) => typeof line === "string").length;
-  }
-  if (typeof value === "string") {
-    return countTextLines(value.endsWith("\n") ? value.slice(0, -1) : value);
-  }
-  return 0;
-}
-
-function formatEditReference(value: unknown): string {
-  return typeof value === "string" && value.trim()
-    ? sanitizeInlineText(value, 40)
-    : "anchor";
-}
-
-function formatStructuredEditSummary(edit: Record<string, unknown>, index: number): string | null {
-  const ordinal = `edit #${index + 1}`;
-  const op = typeof edit.op === "string" ? edit.op : "replace_text";
-
-  if (typeof edit.oldText === "string" && typeof edit.newText === "string" && op === "replace_text") {
-    return `${ordinal} replaces ${formatCount(countTextLines(edit.oldText), "line", "lines")} with ${formatCount(countTextLines(edit.newText), "line", "lines")}`;
-  }
-
-  const lineCount = formatCount(countEditPayloadLines(edit.lines), "line", "lines");
-  switch (op) {
-    case "replace": {
-      const start = formatEditReference(edit.pos);
-      const end = typeof edit.end === "string" && edit.end.trim()
-        ? ` through ${formatEditReference(edit.end)}`
-        : "";
-      return `${ordinal} replaces ${lineCount} at ${start}${end}`;
-    }
-    case "append":
-      return `${ordinal} appends ${lineCount}${typeof edit.pos === "string" ? ` after ${formatEditReference(edit.pos)}` : " at EOF"}`;
-    case "prepend":
-      return `${ordinal} prepends ${lineCount}${typeof edit.pos === "string" ? ` before ${formatEditReference(edit.pos)}` : " at BOF"}`;
-    case "delete": {
-      const start = formatEditReference(edit.pos);
-      const end = typeof edit.end === "string" && edit.end.trim()
-        ? ` through ${formatEditReference(edit.end)}`
-        : "";
-      return `${ordinal} deletes at ${start}${end}`;
-    }
-    default:
-      return null;
-  }
-}
-
-function formatStructuredEditInputForPrompt(input: Record<string, unknown>, fallback?: string): string | null {
-  const path = getPromptPath(input);
-  const editSummaries = getStructuredEditPayloads(input)
-    .map((edit, index) => formatStructuredEditSummary(toRecord(edit), index))
-    .filter((summary): summary is string => typeof summary === "string" && summary.length > 0);
-
-  const pathPart = path ? `for '${path}'` : "";
-  if (editSummaries.length === 0) {
-    if (!fallback) {
-      return null;
-    }
-    return pathPart ? `${pathPart} ${fallback}` : fallback;
-  }
-
-  const extraEdits = editSummaries.length > 1 ? `, plus ${formatCount(editSummaries.length - 1, "additional edit", "additional edits")}` : "";
-  const summary = `(${formatCount(editSummaries.length, "edit", "edits")}: ${editSummaries[0]}${extraEdits})`;
-  return pathPart ? `${pathPart} ${summary}` : summary;
-}
-
-function formatEditInputForPrompt(input: Record<string, unknown>): string {
-  return formatStructuredEditInputForPrompt(input, "with edit input") ?? "with edit input";
-}
-
-function formatWriteInputForPrompt(input: Record<string, unknown>): string {
-  const path = getPromptPath(input);
-  const content = typeof input.content === "string" ? input.content : "";
-  const summary = `(${formatCount(countTextLines(content), "line", "lines")}, ${formatCount(content.length, "character", "characters")})`;
-  return path ? `for '${path}' ${summary}` : summary;
-}
-
-function formatReadInputForPrompt(input: Record<string, unknown>): string {
-  const path = getPromptPath(input);
-  const parts = path ? [`path '${path}'`] : [];
-  if (typeof input.offset === "number") {
-    parts.push(`offset ${input.offset}`);
-  }
-  if (typeof input.limit === "number") {
-    parts.push(`limit ${input.limit}`);
-  }
-  return parts.length > 0 ? `for ${parts.join(", ")}` : "";
-}
-
-function formatSearchInputForPrompt(toolName: string, input: Record<string, unknown>): string {
-  const parts: string[] = [];
-  const path = getPromptPath(input);
-  const pattern = getNonEmptyString(input.pattern);
-  const glob = getNonEmptyString(input.glob);
-
-  if (pattern) {
-    parts.push(`pattern '${sanitizeInlineText(pattern)}'`);
-  }
-  if (glob) {
-    parts.push(`glob '${sanitizeInlineText(glob)}'`);
-  }
-  if (path) {
-    parts.push(`path '${path}'`);
-  } else if (toolName === "find" || toolName === "grep" || toolName === "ls") {
-    parts.push("current working directory");
-  }
-
-  return parts.length > 0 ? `for ${parts.join(", ")}` : "";
-}
-
-function serializeToolInputPreview(input: unknown): string {
-  const serialized = safeJsonStringify(input);
-  if (!serialized || serialized === "{}" || serialized === "null") {
-    return "";
-  }
-
-  return serialized.replace(/\s+/g, " ").trim();
-}
-
-function formatJsonInputForPrompt(input: unknown): string {
-  const inline = serializeToolInputPreview(input);
-  return inline ? `with input ${truncateInlineText(inline, TOOL_INPUT_PREVIEW_MAX_LENGTH)}` : "";
-}
-
-function formatToolInputForPrompt(toolName: string, input: unknown): string {
-  const inputRecord = toRecord(input);
-
-  switch (toolName) {
-    case "edit":
-      return formatEditInputForPrompt(inputRecord);
-    case "write":
-      return formatWriteInputForPrompt(inputRecord);
-    case "read":
-      return formatReadInputForPrompt(inputRecord);
-    case "find":
-    case "grep":
-    case "ls":
-      return formatSearchInputForPrompt(toolName, inputRecord);
-    default: {
-      const structuredEditPreview = formatStructuredEditInputForPrompt(inputRecord);
-      return structuredEditPreview ?? formatJsonInputForPrompt(input);
-    }
-  }
-}
-
-function formatAskPrompt(result: PermissionCheckResult, agentName?: string, input?: unknown): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-
-  if (result.toolName === "bash") {
-    const patternInfo = result.matchedPattern ? ` (matched '${result.matchedPattern}')` : "";
-    return `${subject} requested bash command '${result.command || ""}'${patternInfo}. Allow this command?`;
-  }
-
-  if ((result.source === "mcp" || result.toolName === "mcp") && result.target) {
-    const patternInfo = result.matchedPattern ? ` (matched '${result.matchedPattern}')` : "";
-    return `${subject} requested MCP target '${result.target}'${patternInfo}. Allow this call?`;
-  }
-
-  const patternInfo = result.matchedPattern ? ` (matched '${result.matchedPattern}')` : "";
-  const inputPreview = formatToolInputForPrompt(result.toolName, input);
-  const inputSuffix = inputPreview ? ` ${inputPreview}` : "";
-  return `${subject} requested tool '${result.toolName}'${patternInfo}${inputSuffix}. Allow this call?`;
-}
-
-function formatSkillAskPrompt(skillName: string, agentName?: string): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-  return `${subject} requested skill '${skillName}'. Allow loading this skill?`;
-}
-
-function formatSkillPathAskPrompt(skill: SkillPromptEntry, readPath: string, agentName?: string): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-  return `${subject} requested access to skill '${skill.name}' via '${readPath}'. Allow this read?`;
-}
-
-function formatSkillPathDenyReason(skill: SkillPromptEntry, readPath: string, agentName?: string): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-  return `${subject} is not permitted to access this skill.`;
 }
 
 function extractSkillNameUnderRoot(normalizedReadPath: string, normalizedSkillsRoot: string): string | null {
@@ -607,7 +328,7 @@ function extractSkillNameUnderRoot(normalizedReadPath: string, normalizedSkillsR
   }
 
   const relativeSkillPath = relative(normalizedSkillsRoot, normalizedReadPath);
-  const skillName = relativeSkillPath.split(/[\\/]+/).find((part) => part.length > 0);
+  const skillName = relativeSkillPath.split(/[\\/]+/).find((part: string) => part.length > 0);
   return skillName ?? null;
 }
 
@@ -646,39 +367,6 @@ function inferSkillEntryFromReadPath(
   return null;
 }
 
-function formatExternalDirectoryHardStopHint(): string {
-  return "Hard stop: this external directory permission denial is policy-enforced. Do not retry this path, do not attempt a filesystem bypass, and report the block to the user.";
-}
-
-function formatExternalDirectoryAskPrompt(
-  toolName: string,
-  pathValue: string,
-  cwd: string,
-  agentName?: string,
-): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-  return `${subject} requested tool '${toolName}' for path '${pathValue}' outside working directory '${cwd}'. Allow this external directory access?`;
-}
-
-function formatExternalDirectoryDenyReason(
-  toolName: string,
-  pathValue: string,
-  cwd: string,
-  agentName?: string,
-): string {
-  const subject = agentName ? `Agent '${agentName}'` : "Current agent";
-  return `${subject} is not permitted to run tool '${toolName}' for path '${pathValue}' outside working directory '${cwd}'. ${formatExternalDirectoryHardStopHint()}`;
-}
-
-function formatExternalDirectoryUserDeniedReason(
-  toolName: string,
-  pathValue: string,
-  denialReason?: string,
-): string {
-  const reasonSuffix = denialReason ? ` Reason: ${denialReason}.` : "";
-  return `User denied external directory access for tool '${toolName}' path '${pathValue}'.${reasonSuffix} ${formatExternalDirectoryHardStopHint()}`;
-}
-
 function createSensitiveLogMetadata(value: string | undefined): SensitiveLogMetadata | null {
   if (value === undefined) {
     return null;
@@ -710,16 +398,35 @@ function createDuplicatePermissionPromptDecision(decision: PermissionPromptDecis
     : clonePermissionPromptDecision(decision);
 }
 
-function createPermissionPromptFingerprint(details: PermissionPromptDetails): string {
-  return safeJsonStringify({
-    source: details.source,
-    agentName: details.agentName,
-    message: details.message,
+function pickPermissionPromptToolFields(details: PermissionPromptDetails): Record<string, unknown> {
+  return {
     toolCallId: details.toolCallId ?? null,
     toolName: details.toolName ?? null,
     skillName: details.skillName ?? null,
     path: details.path ?? null,
     command: details.command ?? null,
+  };
+}
+
+function buildToolCallBlockedEntryFields(
+  toolCallId: string | undefined,
+  toolName: string,
+  agentName: string | null,
+): Record<string, unknown> {
+  return {
+    source: "tool_call",
+    toolCallId,
+    toolName,
+    agentName,
+  };
+}
+
+function createPermissionPromptFingerprint(details: PermissionPromptDetails): string {
+  return safeJsonStringify({
+    source: details.source,
+    agentName: details.agentName,
+    message: details.message,
+    ...pickPermissionPromptToolFields(details),
     target: details.target ?? null,
     toolInput: details.toolInput ?? null,
   }) ?? "";
@@ -851,7 +558,6 @@ function applyPatternApprovalState(
   result: PermissionCheckResult,
   input: unknown,
   sessionApprovals: SessionApprovalStore,
-  permanentApprovals: PermanentApprovalStore,
 ): PermissionCheckResult {
   if (result.state === "deny") {
     return result;
@@ -863,7 +569,6 @@ function applyPatternApprovalState(
     subject,
     [createConfigEvaluationRule(result)],
     sessionApprovals.getRules(),
-    permanentApprovals.getRules(),
   );
 
   return {
@@ -887,12 +592,12 @@ function getPermissionDecisionScope(details: {
     ?? details.skillName;
 }
 
-function persistPatternApprovalDecision(
+function persistSessionApprovalDecision(
   decision: PermissionPromptDecision,
   result: PermissionCheckResult,
   input: unknown,
   sessionApprovals: SessionApprovalStore,
-): string | null {
+): { subject: string; persistence: "session" } | null {
   if (!decision.approved || decision.state !== "always") {
     return null;
   }
@@ -903,7 +608,7 @@ function persistPatternApprovalDecision(
   }
 
   sessionApprovals.approveAlways(result.toolName, subject);
-  return subject;
+  return { subject, persistence: "session" };
 }
 
 function waitForForwardedPermissionResponseFile(responsePath: string, deadline: number): Promise<void> {
@@ -931,8 +636,12 @@ function waitForForwardedPermissionResponseFile(responsePath: string, deadline: 
       if (watcher) {
         try {
           watcher.close();
-        } catch {
-          // Ignore watcher cleanup errors; polling fallback covers missed events.
+        } catch (error) {
+          // Watcher cleanup is best-effort; the polling fallback covers missed events.
+          writeDebugEntry("permission_forwarding.watcher_close_error", {
+            responseDir,
+            error: formatUnknownErrorMessage(error),
+          });
         }
       }
       resolve();
@@ -946,8 +655,12 @@ function waitForForwardedPermissionResponseFile(responsePath: string, deadline: 
         }
       });
       watcher.on("error", finish);
-    } catch {
+    } catch (error) {
       // Directory watches are best-effort across filesystems; the timeout preserves safe fallback polling.
+      writeDebugEntry("permission_forwarding.watch_setup_error", {
+        responseDir,
+        error: formatUnknownErrorMessage(error),
+      });
     }
   });
 }
@@ -957,13 +670,24 @@ function normalizeFilesystemPath(pathValue: string): string {
   return process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
 }
 
+function resolvePathWithinDirectory(directory: string, fileName: string): string | null {
+  const resolvedDirectory = resolve(directory);
+  const resolvedPath = resolve(directory, fileName);
+  const comparableDirectory = normalizeFilesystemPath(resolvedDirectory);
+  const comparablePath = normalizeFilesystemPath(resolvedPath);
+  return isPathWithinDirectory(comparablePath, comparableDirectory) ? resolvedPath : null;
+}
+
 function getSessionId(ctx: ExtensionContext): string {
   try {
     const sessionId = ctx.sessionManager.getSessionId();
     if (typeof sessionId === "string" && sessionId.trim()) {
       return sessionId.trim();
     }
-  } catch {
+  } catch (error) {
+    writeDebugEntry("permission_request.session_id_error", {
+      error: formatUnknownErrorMessage(error),
+    });
   }
 
   return "unknown";
@@ -1000,23 +724,23 @@ function formatUnknownErrorMessage(error: unknown): string {
 }
 
 function isErrnoCode(error: unknown, code: string): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === code);
+  return isNodeErrorWithCode(error, code);
+}
+
+function logPermissionForwardingEntry(event: "warning" | "error", message: string, error?: unknown): void {
+  const details = typeof error === "undefined"
+    ? { message }
+    : { message, error: formatUnknownErrorMessage(error) };
+
+  writeReviewEntry(`permission_forwarding.${event}`, details);
 }
 
 function logPermissionForwardingWarning(message: string, error?: unknown): void {
-  const details = typeof error === "undefined"
-    ? { message }
-    : { message, error: formatUnknownErrorMessage(error) };
-
-  writeReviewEntry("permission_forwarding.warning", details);
+  logPermissionForwardingEntry("warning", message, error);
 }
 
 function logPermissionForwardingError(message: string, error?: unknown): void {
-  const details = typeof error === "undefined"
-    ? { message }
-    : { message, error: formatUnknownErrorMessage(error) };
-
-  writeReviewEntry("permission_forwarding.error", details);
+  logPermissionForwardingEntry("error", message, error);
 }
 
 function setRestrictiveFileSystemMode(path: string, mode: number, description: string): void {
@@ -1053,15 +777,27 @@ function getPermissionForwardingLocationForSession(
   return createPermissionForwardingLocation(getPermissionForwardingRootDir(ctx), sessionId);
 }
 
+function resolveForwardingLocation(
+  sessionId: string,
+  ctx: ExtensionContext,
+  onError?: (error: unknown) => void,
+): PermissionForwardingLocation | null {
+  try {
+    return getPermissionForwardingLocationForSession(sessionId, ctx);
+  } catch (error) {
+    onError?.(error);
+    return null;
+  }
+}
+
 function ensurePermissionForwardingLocation(
   sessionId: string,
   ctx: ExtensionContext,
 ): PermissionForwardingLocation | null {
-  let location: PermissionForwardingLocation;
-  try {
-    location = getPermissionForwardingLocationForSession(sessionId, ctx);
-  } catch (error) {
-    logPermissionForwardingError("Failed to resolve permission forwarding location", error);
+  const location = resolveForwardingLocation(sessionId, ctx, (error) =>
+    logPermissionForwardingError("Failed to resolve permission forwarding location", error),
+  );
+  if (!location) {
     return null;
   }
 
@@ -1076,10 +812,8 @@ function getExistingPermissionForwardingLocation(
   sessionId: string,
   ctx: ExtensionContext,
 ): PermissionForwardingLocation | null {
-  let location: PermissionForwardingLocation;
-  try {
-    location = getPermissionForwardingLocationForSession(sessionId, ctx);
-  } catch {
+  const location = resolveForwardingLocation(sessionId, ctx);
+  if (!location) {
     return null;
   }
 
@@ -1354,6 +1088,25 @@ async function waitForForwardedPermissionApproval(
   return { approved: false, state: "denied" };
 }
 
+function createForwardedPermissionLogDetails(
+  request: ForwardedPermissionRequest,
+  location: PermissionForwardingLocation,
+): {
+  requestId: string;
+  source: "primary";
+  requesterAgentName: string | null;
+  requesterSessionId: string | null;
+  targetSessionId: string | null;
+} {
+  return {
+    requestId: request.id,
+    source: location.label,
+    requesterAgentName: request.requesterAgentName,
+    requesterSessionId: request.requesterSessionId,
+    targetSessionId: request.targetSessionId,
+  };
+}
+
 export async function processForwardedPermissionRequests(
   ctx: ExtensionContext,
   options: { preserveLocation?: boolean } = {},
@@ -1371,7 +1124,7 @@ export async function processForwardedPermissionRequests(
   let requestFiles: string[] = [];
   try {
     requestFiles = readdirSync(location.requestsDir)
-      .filter((name) => name.endsWith(".json"))
+      .filter((name: string) => name.endsWith(".json"))
       .sort();
   } catch (error) {
     logPermissionForwardingWarning(`Failed to read ${location.label} permission forwarding requests from '${location.requestsDir}'`, error);
@@ -1402,12 +1155,15 @@ export async function processForwardedPermissionRequests(
       continue;
     }
 
+    const responsePath = resolvePathWithinDirectory(location.responsesDir, `${request.id}.json`);
+    if (!responsePath) {
+      logPermissionForwardingWarning(`Ignoring forwarded permission request '${request.id}' because its response path would escape '${location.responsesDir}'`);
+      safeDeleteFile(requestPath, `${location.label} forwarded permission request`);
+      continue;
+    }
+
     const forwardedPermissionLogDetails = {
-      requestId: request.id,
-      source: location.label,
-      requesterAgentName: request.requesterAgentName,
-      requesterSessionId: request.requesterSessionId,
-      targetSessionId: request.targetSessionId,
+      ...createForwardedPermissionLogDetails(request, location),
       requestPath,
     };
 
@@ -1469,13 +1225,8 @@ export async function processForwardedPermissionRequests(
       }
     }
 
-    const responsePath = join(location.responsesDir, `${request.id}.json`);
     writeReviewEntry(decision.approved ? "forwarded_permission.approved" : "forwarded_permission.denied", {
-      requestId: request.id,
-      source: location.label,
-      requesterAgentName: request.requesterAgentName,
-      requesterSessionId: request.requesterSessionId,
-      targetSessionId: request.targetSessionId,
+      ...createForwardedPermissionLogDetails(request, location),
       responsePath,
       resolution: decision.state,
       denialReasonMetadata: createSensitiveLogMetadata(decision.denialReason),
@@ -1594,16 +1345,21 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
   let permissionManager = createPermissionManagerForCwd(undefined, notifyWarning);
   const sessionApprovals = new SessionApprovalStore();
-  const permanentApprovals = new PermanentApprovalStore({ persistencePath: PERMANENT_APPROVALS_PATH });
   const recentPermissionPromptDecisions = new Map<string, CachedPermissionPromptDecision>();
 
-  const refreshExtensionConfig = (ctx?: ExtensionContext): void => {
+  const loadExtensionConfigState = (): PermissionSystemConfigLoadResult => {
+    const result = loadPermissionSystemConfig();
+    setExtensionConfig(result.config);
+    return result;
+  };
+
+  const applyExtensionConfigSideEffects = (
+    result: PermissionSystemConfigLoadResult,
+    ctx?: ExtensionContext,
+  ): void => {
     if (ctx) {
       runtimeContext = ctx;
     }
-
-    const result = loadPermissionSystemConfig();
-    setExtensionConfig(result.config);
 
     if (runtimeContext?.hasUI) {
       syncPermissionSystemStatus(runtimeContext, result.config);
@@ -1622,6 +1378,11 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       debug: result.config.debug,
       yoloMode: result.config.yoloMode,
     });
+  };
+
+  const refreshExtensionConfig = (ctx?: ExtensionContext): void => {
+    const result = loadExtensionConfigState();
+    applyExtensionConfigSideEffects(result, ctx);
   };
 
   const syncPermissionSystemStatusWhenPossible = (
@@ -1708,7 +1469,15 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   };
 
   setLoggingWarningReporter(notifyWarning);
-  refreshExtensionConfig();
+
+  const initialConfigResult = loadExtensionConfigState();
+
+  if (!extensionConfig.enabled) {
+    return;
+  }
+
+  applyExtensionConfigSideEffects(initialConfigResult);
+
   runtimeApi = registerPiPermissionSystemRuntimeApi({
     getYoloMode: () => extensionConfig.yoloMode,
     setYoloMode: setYoloModeFromRuntimeApi,
@@ -1719,7 +1488,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   const ensureModelOptionCompatibilityRegistered = (): Promise<void> => {
     if (!modelOptionCompatibilityRegistration) {
       modelOptionCompatibilityRegistration = import("./model-option-compatibility.js")
-        .then(({ registerModelOptionCompatibilityGuard }) => {
+        .then(({ registerModelOptionCompatibilityGuard }: { registerModelOptionCompatibilityGuard: (pi: ExtensionAPI) => void }) => {
           registerModelOptionCompatibilityGuard(pi);
         })
         .catch(() => {
@@ -1731,19 +1500,15 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("permission-system", {
-    description: "Configure pi-permission-system debug logging and yolo-mode behavior",
-    handler: async (_args, ctx) => {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/permission-system requires interactive TUI mode.", "warning");
-        return;
-      }
+    description: PERMISSION_SYSTEM_COMMAND_DESCRIPTION,
+    handler: createPermissionSystemCommandHandler(async (ctx) => {
       const { openPermissionSystemSettingsModal } = await import("./config-modal.js");
       await openPermissionSystemSettingsModal(ctx, {
         getConfig: () => extensionConfig,
         setConfig: saveExtensionConfig,
         getConfigPath: getPermissionSystemConfigPath,
       });
-    },
+    }),
   });
 
   const createPermissionRequestId = (prefix: string): string => {
@@ -1763,6 +1528,26 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
   };
 
+  const emitPermissionStateEvent = (
+    details: PermissionPromptDetails,
+    state: PermissionRequestState,
+  ): void => {
+    emitPermissionRequestEvent({
+      requestId: details.requestId,
+      source: details.source,
+      state,
+      message: details.message,
+      toolCallId: details.toolCallId,
+      toolName: details.toolName,
+      skillName: details.skillName,
+      path: details.path,
+      command: details.command,
+      target: details.target,
+      toolInput: details.toolInput,
+      agentName: details.agentName,
+    });
+  };
+
   const reviewPermissionDecision = (
     event: string,
     details: PermissionPromptDetails,
@@ -1773,11 +1558,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       agentName: details.agentName,
       prompt: details.message,
       promptMetadata: createSensitiveLogMetadata(details.message),
-      toolCallId: details.toolCallId ?? null,
-      toolName: details.toolName ?? null,
-      skillName: details.skillName ?? null,
-      path: details.path ?? null,
-      command: details.command ?? null,
+      ...pickPermissionPromptToolFields(details),
       commandMetadata: details.commandMetadata ?? null,
       target: details.target ?? null,
       toolInput: details.toolInput ?? null,
@@ -1822,39 +1603,13 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           decisionPersistence: "none",
           decisionScope: "yolo_mode",
         });
-        emitPermissionRequestEvent({
-          requestId: details.requestId,
-          source: details.source,
-          state: "approved",
-          message: details.message,
-          toolCallId: details.toolCallId,
-          toolName: details.toolName,
-          skillName: details.skillName,
-          path: details.path,
-          command: details.command,
-          target: details.target,
-          toolInput: details.toolInput,
-          agentName: details.agentName,
-        });
+        emitPermissionStateEvent(details, "approved");
         await extensionLogger.flush();
         return { approved: true, state: "approved" };
       }
 
       reviewPermissionDecision("permission_request.waiting", details);
-      emitPermissionRequestEvent({
-        requestId: details.requestId,
-        source: details.source,
-        state: "waiting",
-        message: details.message,
-        toolCallId: details.toolCallId,
-        toolName: details.toolName,
-        skillName: details.skillName,
-        path: details.path,
-        command: details.command,
-        target: details.target,
-        toolInput: details.toolInput,
-        agentName: details.agentName,
-      });
+      emitPermissionStateEvent(details, "waiting");
 
       const decision = await confirmPermission(ctx, details.message);
       reviewPermissionDecision(decision.approved ? "permission_request.approved" : "permission_request.denied", {
@@ -1868,20 +1623,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           ? getPermissionDecisionScope(details)
           : undefined,
       });
-      emitPermissionRequestEvent({
-        requestId: details.requestId,
-        source: details.source,
-        state: decision.approved ? "approved" : "denied",
-        message: details.message,
-        toolCallId: details.toolCallId,
-        toolName: details.toolName,
-        skillName: details.skillName,
-        path: details.path,
-        command: details.command,
-        target: details.target,
-        toolInput: details.toolInput,
-        agentName: details.agentName,
-      });
+      emitPermissionStateEvent(details, decision.approved ? "approved" : "denied");
 
       await extensionLogger.flush();
       return decision;
@@ -2009,7 +1751,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           queueForwardedPermissionRequestScan();
         }
       });
-      permissionForwardingWatcher.on("error", (error) => {
+      permissionForwardingWatcher.on("error", (error: unknown) => {
         logPermissionForwardingWarning(
           `Permission forwarding watcher failed for '${location.requestsDir}'; using reduced-frequency polling fallback`,
           error,
@@ -2058,7 +1800,6 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       },
       {},
       sessionApprovals,
-      permanentApprovals,
     ).state;
     if (toolPermission !== "deny") {
       return true;
@@ -2084,7 +1825,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     startForwardedPermissionPolling(ctx);
   };
 
-  pi.on("session_start", async (event, ctx) => {
+  pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext) => {
     await ensureModelOptionCompatibilityRegistered();
     sessionApprovals.clear();
     recentPermissionPromptDecisions.clear();
@@ -2100,7 +1841,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("resources_discover", async (event, _ctx) => {
+  pi.on("resources_discover", async (event: ResourcesDiscoverEvent, _ctx: ExtensionContext) => {
     if (event.reason === "reload") {
       resetShownWarnings();
       recentPermissionPromptDecisions.clear();
@@ -2131,7 +1872,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     stopForwardedPermissionPolling();
   });
 
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", async (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     runtimeContext = ctx;
     refreshExtensionConfig(ctx);
     startForwardedPermissionPolling(ctx);
@@ -2189,7 +1930,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     return {};
   });
 
-  pi.on("input", async (event, ctx) => {
+  pi.on("input", async (event: InputEvent, ctx: ExtensionContext) => {
     runtimeContext = ctx;
     startForwardedPermissionPolling(ctx);
     const skillName = extractSkillNameFromInput(event.text);
@@ -2205,7 +1946,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     return { action: "continue" };
   });
 
-  pi.on("tool_call", async (event, ctx) => {
+  pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
     runtimeContext = ctx;
     startForwardedPermissionPolling(ctx);
     const agentName = resolveAgentName(ctx);
@@ -2228,77 +1969,79 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
 
     if (isToolCallEventType("read", event)) {
-      const normalizedReadPath = normalizePathForComparison(event.input.path, ctx.cwd);
-      const matchedSkill = findSkillPathMatch(normalizedReadPath, activeSkillEntries);
-      const inferredSkill = matchedSkill
-        ? null
-        : inferSkillEntryFromReadPath(event.input.path, ctx.cwd, "ask");
-      const inferredSkillCheck = inferredSkill
-        ? permissionManager.checkPermission("skill", { name: inferredSkill.name }, agentName ?? undefined)
-        : null;
-      const readSkill = matchedSkill ?? (inferredSkill && inferredSkillCheck
-        ? { ...inferredSkill, state: inferredSkillCheck.state }
-        : null);
+      const readInputRecord = toRecord(event.input);
+      const readPath = getNonEmptyString(readInputRecord.path);
+      if (readPath) {
+        const normalizedReadPath = normalizePathForComparison(readPath, ctx.cwd);
+        const matchedSkill = findSkillPathMatch(normalizedReadPath, activeSkillEntries);
+        const inferredSkill = matchedSkill
+          ? null
+          : inferSkillEntryFromReadPath(readPath, ctx.cwd, "ask");
+        const inferredSkillCheck = inferredSkill
+          ? permissionManager.checkPermission("skill", { name: inferredSkill.name }, agentName ?? undefined)
+          : null;
+        const readSkill = matchedSkill ?? (inferredSkill && inferredSkillCheck
+          ? { ...inferredSkill, state: inferredSkillCheck.state }
+          : null);
 
-      if (readSkill && !explicitlyRequestedSkillNames.has(readSkill.name)) {
-        if (readSkill.state === "deny") {
-          writeReviewEntry("permission_request.blocked", {
+        if (readSkill && !explicitlyRequestedSkillNames.has(readSkill.name)) {
+          const skillReadBlockedFields = {
             source: "skill_read",
             toolCallId: event.toolCallId,
             toolName,
             skillName: readSkill.name,
             agentName,
-            path: event.input.path,
-            toolInput: event.input,
-            resolution: "policy_denied",
-          });
-          return {
-            block: true,
-            reason: formatSkillPathDenyReason(readSkill, event.input.path, agentName ?? undefined),
+            path: readPath,
           };
-        }
-
-        if (readSkill.state === "ask") {
-          const message = formatSkillPathAskPrompt(readSkill, event.input.path, agentName ?? undefined);
-          if (!canRequestPermissionConfirmation(ctx)) {
+          if (readSkill.state === "deny") {
             writeReviewEntry("permission_request.blocked", {
-              source: "skill_read",
-              toolCallId: event.toolCallId,
-              toolName,
-              skillName: readSkill.name,
-              agentName,
-              path: event.input.path,
-              prompt: message,
-              promptMetadata: createSensitiveLogMetadata(message),
+              ...skillReadBlockedFields,
               toolInput: event.input,
-              resolution: "confirmation_unavailable",
+              resolution: "policy_denied",
             });
             return {
               block: true,
-              reason: `Accessing this skill requires approval, but no interactive UI is available.`,
+              reason: formatSkillPathDenyReason(readSkill, readPath, agentName ?? undefined),
             };
           }
 
-          const decision = await promptPermission(ctx, {
-            requestId: event.toolCallId,
-            source: "skill_read",
-            agentName,
-            message,
-            toolCallId: event.toolCallId,
-            toolName: toolName,
-            skillName: readSkill.name,
-            path: event.input.path,
-            toolInput: event.input,
-          });
-          if (!decision.approved) {
-            const denialReason = decision.denialReason ? ` Reason: ${decision.denialReason}.` : "";
-            return { block: true, reason: `User denied access to this skill.${denialReason}` };
+          if (readSkill.state === "ask") {
+            const message = formatSkillPathAskPrompt(readSkill, readPath, agentName ?? undefined);
+            if (!canRequestPermissionConfirmation(ctx)) {
+              writeReviewEntry("permission_request.blocked", {
+                ...skillReadBlockedFields,
+                prompt: message,
+                promptMetadata: createSensitiveLogMetadata(message),
+                toolInput: event.input,
+                resolution: "confirmation_unavailable",
+              });
+              return {
+                block: true,
+                reason: `Accessing this skill requires approval, but no interactive UI is available.`,
+              };
+            }
+
+            const decision = await promptPermission(ctx, {
+              requestId: event.toolCallId,
+              source: "skill_read",
+              agentName,
+              message,
+              toolCallId: event.toolCallId,
+              toolName: toolName,
+              skillName: readSkill.name,
+              path: readPath,
+              toolInput: event.input,
+            });
+            if (!decision.approved) {
+              const denialReason = decision.denialReason ? ` Reason: ${decision.denialReason}.` : "";
+              return { block: true, reason: `User denied access to this skill.${denialReason}` };
+            }
           }
         }
-      }
 
-      if (readSkill) {
-        return {};
+        if (readSkill) {
+          return {};
+        }
       }
     }
 
@@ -2317,7 +2060,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         agentName ?? undefined,
       );
       const extCheck = rawExtCheck.state === "ask"
-        ? applyPatternApprovalState(rawExtCheck, externalPermissionInput, sessionApprovals, permanentApprovals)
+        ? applyPatternApprovalState(rawExtCheck, externalPermissionInput, sessionApprovals)
         : rawExtCheck;
 
       if (extCheck.state === "deny") {
@@ -2350,10 +2093,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         );
         if (!canRequestPermissionConfirmation(ctx)) {
           writeReviewEntry("permission_request.blocked", {
-            source: "tool_call",
-            toolCallId: event.toolCallId,
-            toolName,
-            agentName,
+            ...buildToolCallBlockedEntryFields(event.toolCallId, toolName, agentName),
             path: externalDirectoryPath,
             prompt: message,
             promptMetadata: createSensitiveLogMetadata(message),
@@ -2388,13 +2128,13 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           };
         }
 
-        const externalApprovalSubject = persistPatternApprovalDecision(
+        const externalApproval = persistSessionApprovalDecision(
           extDecision,
           extCheck,
           externalPermissionInput,
           sessionApprovals,
         );
-        if (externalApprovalSubject) {
+        if (externalApproval) {
           writeReviewEntry("permission_request.approval_persisted", {
             source: "tool_call",
             toolCallId: event.toolCallId,
@@ -2403,9 +2143,9 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
             path: externalDirectoryPath,
             toolInput: input,
             resolution: extDecision.state,
-            decisionPersistence: "session",
-            approvalPersistence: "session",
-            approvalScope: externalApprovalSubject,
+            decisionPersistence: externalApproval.persistence,
+            approvalPersistence: externalApproval.persistence,
+            approvalScope: externalApproval.subject,
           });
           await extensionLogger.flush();
         }
@@ -2417,7 +2157,6 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       permissionManager.checkPermission(toolName, input, agentName ?? undefined),
       input,
       sessionApprovals,
-      permanentApprovals,
     );
     const permissionLogContext = getPermissionLogContext(check, input);
 
@@ -2451,10 +2190,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       const message = formatAskPrompt(check, agentName ?? undefined, input);
       if (!canRequestPermissionConfirmation(ctx)) {
         writeReviewEntry("permission_request.blocked", {
-          source: "tool_call",
-          toolCallId: event.toolCallId,
-          toolName,
-          agentName,
+          ...buildToolCallBlockedEntryFields(event.toolCallId, toolName, agentName),
           prompt: message,
           promptMetadata: createSensitiveLogMetadata(message),
           ...permissionLogContext,
@@ -2478,8 +2214,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       if (!decision.approved) {
         return { block: true, reason: formatUserDeniedReason(check, decision.denialReason) };
       }
-      const approvalSubject = persistPatternApprovalDecision(decision, check, input, sessionApprovals);
-      if (approvalSubject) {
+      const approval = persistSessionApprovalDecision(decision, check, input, sessionApprovals);
+      if (approval) {
         writeReviewEntry("permission_request.approval_persisted", {
           source: "tool_call",
           toolCallId: event.toolCallId,
@@ -2487,9 +2223,9 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           agentName,
           ...permissionLogContext,
           resolution: decision.state,
-          decisionPersistence: "session",
-          approvalPersistence: "session",
-          approvalScope: approvalSubject,
+          decisionPersistence: approval.persistence,
+          approvalPersistence: approval.persistence,
+          approvalScope: approval.subject,
         });
       }
       await extensionLogger.flush();

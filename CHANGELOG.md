@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-03
+
+### Changed
+- Extracted shared utilities and consolidated permission matching.
+- Preserved non-extension config fields and handled symlinks during config writes.
+- Narrowed types and consolidated modal rendering.
+- Extracted a shared test harness and added regression tests.
+- Updated README with badges, a Ko-fi link, and Bun test instructions.
+- Widened Pi peer dependency compatibility to include `^0.80.0` and added vulnerability overrides (`protobufjs`, `ws`).
+
+### Removed
+- Removed `PermanentApprovalStore` and the `pi-permission-system-approvals.json` persistence file. `Allow Always` now records session-only (in-memory) approvals via `SessionApprovalStore`, matching the documented behavior. Cross-session persistent approvals are no longer written to disk.
+
 ## [0.7.1] - 2026-06-16
 
 ### Added
@@ -21,7 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added `SessionApprovalStore` for in-memory per-session permission approval tracking with `approveAlways`, `approveOnce`, `hasSessionApproval`, and `evaluate` methods.
-- Added `PermanentApprovalStore` for persistent approval rules with atomic file writes and last-match-wins evaluation, stored at `pi-permission-system-approvals.json`.
 - Added `evaluate-permission.ts` module with `evaluatePermission()` function that evaluates tool+command pairs against multiple rulesets with last-match-wins semantics.
 - Added forwarded permission prompt auto-denial timeout (30 seconds) so unanswered forwarded subagent prompts automatically deny instead of blocking indefinitely.
 - Added `Allow Once`/`Allow Always`/`Reject`/`Reject with Reason` permission decision options replacing the previous `Yes`/`No`/`No, provide reason` labels.
