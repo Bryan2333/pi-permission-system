@@ -10,15 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-07-03
 
 ### Changed
-- Extracted shared utilities and consolidated permission matching.
-- Preserved non-extension config fields and handled symlinks during config writes.
-- Narrowed types and consolidated modal rendering.
-- Extracted a shared test harness and added regression tests.
-- Updated README with badges, a Ko-fi link, and Bun test instructions.
-- Widened Pi peer dependency compatibility to include `^0.80.0` and added vulnerability overrides (`protobufjs`, `ws`).
+- Extracted shared utilities and consolidated permission matching. ([d1875bd](https://github.com/MasuRii/pi-permission-system/commit/d1875bdd1a26989bdd8cd1193cad9a50622897f6))
+- Preserved non-extension config fields and handled symlinks during config writes. ([acd5c79](https://github.com/MasuRii/pi-permission-system/commit/acd5c79850bfbe00c4511f333b6ea14c6f904178))
+- Narrowed types and consolidated modal rendering. ([d2ea4f8](https://github.com/MasuRii/pi-permission-system/commit/d2ea4f8160975bc2b7e1bdc03464841acbc28ad3))
+- Extracted a shared test harness and added regression tests. ([cd9a253](https://github.com/MasuRii/pi-permission-system/commit/cd9a253beddd6670b70c0ea3e74f234db2c137c4))
+- Updated README with badges, a Ko-fi link, and Bun test instructions. ([7e57c47](https://github.com/MasuRii/pi-permission-system/commit/7e57c47144985da433b6cd1642978026b9cff051))
+- Widened Pi peer dependency compatibility to include `^0.80.0` and added vulnerability overrides (`protobufjs`, `ws`). ([0ed23af](https://github.com/MasuRii/pi-permission-system/commit/0ed23af51e5ca0897c83175b420d07fee8823921))
 
 ### Removed
-- Removed `PermanentApprovalStore` and the `pi-permission-system-approvals.json` persistence file. `Allow Always` now records session-only (in-memory) approvals via `SessionApprovalStore`, matching the documented behavior. Cross-session persistent approvals are no longer written to disk.
+- Removed `PermanentApprovalStore` and the `pi-permission-system-approvals.json` persistence file. `Allow Always` now records session-only (in-memory) approvals via `SessionApprovalStore`, matching the documented behavior. Cross-session persistent approvals are no longer written to disk. ([a33ac2c](https://github.com/MasuRii/pi-permission-system/commit/a33ac2c5159eacb81b87b673706902cd95a27029))
 
 ## [0.7.1] - 2026-06-16
 
