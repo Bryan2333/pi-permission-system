@@ -1,10 +1,17 @@
-# 🔐 pi-permission-system
+<div align="center">
 
-[![npm version](https://img.shields.io/npm/v/pi-permission-system?style=flat-square)](https://www.npmjs.com/package/pi-permission-system) [![License](https://img.shields.io/github/license/MasuRii/pi-permission-system?style=flat-square)](LICENSE)
+# pi-permission-system
+
+[![npm version](https://img.shields.io/npm/v/pi-permission-system?style=for-the-badge)](https://www.npmjs.com/package/pi-permission-system)
+[![License](https://img.shields.io/github/license/MasuRii/pi-permission-system?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=for-the-badge)]()
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y01PSSVR)
 
 Permission enforcement extension for the Pi coding agent that provides centralized, deterministic permission gates for tool, bash, MCP, skill, and special operations.
-
 <img width="1360" height="752" alt="image" src="https://github.com/user-attachments/assets/3e85190a-17fa-4d94-ac8e-efa54337df5d" />
+
+</div>
 
 ## Coming from OpenCode?
 
@@ -159,7 +166,7 @@ All permissions use one of three states:
 | `deny`  | Blocks the action with an error message     |
 | `ask`   | Prompts the user for confirmation via UI    |
 
-When an `ask` permission prompts, the confirmation UI offers `Allow Once`, `Allow Always`, `Reject`, and `Reject with Reason`. `Allow Once` approves only the current request. `Allow Always` records an explicit matching approval for the current session, while plain `Reject` and `Reject with Reason` deny only the current request and do not silently become future defaults. YOLO/auto-response approvals also do not create saved approval rules; after YOLO mode is disabled, matching `ask` requests require approval again. A configured `deny` remains a hard boundary and is not relaxed by prior one-shot, auto-response, or saved approvals.
+When an `ask` permission prompts, the confirmation UI offers `Allow Once`, `Allow Always`, `Reject`, and `Reject with Reason`. `Allow Once` approves only the current request. `Allow Always` records an explicit matching approval for the current session only (in-memory, not persisted to disk), while plain `Reject` and `Reject with Reason` deny only the current request and do not silently become future defaults. YOLO/auto-response approvals also do not create saved approval rules; after YOLO mode is disabled, matching `ask` requests require approval again. A configured `deny` remains a hard boundary and is not relaxed by prior one-shot, auto-response, or saved approvals.
 
 ### Pi Integration Hooks
 
@@ -194,6 +201,7 @@ The extension creates this file automatically when it is missing. It controls ex
 
 ```json
 {
+  "enabled": true,
   "debug": false,
   "yoloMode": false
 }
@@ -201,6 +209,7 @@ The extension creates this file automatically when it is missing. It controls ex
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `enabled` | `true` | Master switch. When `false`, the extension skips all registrations and startup work (permission hooks, commands, runtime API, forwarding). |
 | `debug` | `false` | Enables verbose diagnostics and permission review entries in `logs/pi-permission-system-debug.jsonl` |
 | `yoloMode` | `false` | Auto-approves `ask` results instead of prompting when yolo mode is enabled |
 
@@ -666,13 +675,13 @@ npx --yes ajv-cli@5 validate \
 
 ## Development
 
-Runtime checks require Node.js 20+; the test suite runs through Node.js with tsx and Node's experimental test module mocks (validated on Node.js 24).
+Runtime checks require Node.js 20+ and Bun 1.1+; the test suite runs through Bun.
 
 ```bash
 npm run build              # Run TypeScript type checks
 npm run lint               # Run local static checks
 npm run validate:artifacts # Validate JSON/schema/example artifacts
-npm run test               # Run Node/tsx tests from ./tests
+npm run test               # Run Bun tests from ./tests
 npm run check              # Run static, artifact, and test checks
 ```
 
