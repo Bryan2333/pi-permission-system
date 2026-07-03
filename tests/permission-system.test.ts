@@ -398,7 +398,8 @@ runTest("Permission-system extension config defaults debug and yolo mode off", (
     assert.equal(existsSync(configPath), true);
 
     const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(raw).sort(), ["debug", "forwardedPromptTimeoutSeconds", "yoloMode"]);
+    assert.deepEqual(Object.keys(raw).sort(), ["debug", "enabled", "forwardedPromptTimeoutSeconds", "yoloMode"]);
+    assert.equal(raw.enabled, true);
     assert.equal(raw.debug, false);
     assert.equal(raw.yoloMode, false);
   } finally {
@@ -424,6 +425,7 @@ runTest("Permission-system extension config loads debug and yolo mode when expli
     assert.equal(result.created, false);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
+      enabled: true,
       debug: true,
       yoloMode: true,
       forwardedPromptTimeoutSeconds: 30,
@@ -453,6 +455,7 @@ runTest("Permission-system extension config accepts JSONC comments and trailing 
     assert.equal(result.created, false);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
+      enabled: true,
       debug: true,
       yoloMode: true,
       forwardedPromptTimeoutSeconds: 30,
@@ -531,6 +534,7 @@ runTest("Permission-system extension config save persists normalized config", ()
     const result = loadPermissionSystemConfig(configPath);
     assert.equal(result.warning, undefined);
     assert.deepEqual(result.config, {
+      enabled: true,
       debug: true,
       yoloMode: true,
       forwardedPromptTimeoutSeconds: 30,
@@ -784,7 +788,7 @@ await runAsyncTest("before_agent_start returns cached sanitized prompts on repea
   }
 });
 
-await runAsyncTest("Permission-system logger writes debug and review entries only when debug is enabled", async () => {
+await runAsyncTest("Permission-system logger writes review entries without debug and debug entries only when debug is enabled", async () => {
   const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-logs-"));
   const logsDir = join(baseDir, "logs");
   const debugPath = join(logsDir, "debug.jsonl");
@@ -809,7 +813,11 @@ await runAsyncTest("Permission-system logger writes debug and review entries onl
     assert.equal(initialDebugWarning, undefined);
     assert.equal(disabledReviewWarning, undefined);
     await logger.flush();
-    assert.equal(existsSync(debugPath), false);
+    assert.equal(existsSync(debugPath), true);
+    const disabledReviewContent = readFileSync(debugPath, "utf8");
+    assert.match(disabledReviewContent, /permission_request\.waiting/);
+    assert.match(disabledReviewContent, /"stream":"review"/);
+    assert.doesNotMatch(disabledReviewContent, /debug\.disabled/);
 
     config.debug = true;
     const reviewWarning = logger.review("permission_request.waiting", {
@@ -3341,8 +3349,8 @@ await runAsyncTest("TARGETED SMOKE: agent 'code' with '*': deny blocked from rea
 });
 
 // ---------------------------------------------------------------------------
-// Issue #23 Baseline: Current pattern matching behavior before session/
-// permanent approval features are added.
+// Issue #23 Baseline: Current pattern matching behavior before session
+// approval features are added.
 // ---------------------------------------------------------------------------
 
 runTest("ISSUE23-BASELINE: PermissionManager wildcard star matches zero-or-more", () => {

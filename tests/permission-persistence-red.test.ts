@@ -19,6 +19,7 @@ import {
   SUBAGENT_PARENT_SESSION_ENV_KEY,
 } from "../src/permission-forwarding.js";
 import type { GlobalPermissionConfig, PermissionDefaultPolicy } from "../src/types.js";
+import { createMockContext } from "./test-harness.js";
 
 type ExpectedKind = "red" | "regression";
 
@@ -80,33 +81,6 @@ type RuntimeHarnessOptions = {
   activeAgentName?: string | null;
 };
 
-function createMockContext(
-  cwd: string,
-  prompts: string[],
-  options: RuntimeHarnessOptions = {},
-): Record<string, unknown> {
-  return {
-    cwd,
-    hasUI: options.hasUI === true,
-    sessionManager: {
-      getEntries: (): unknown[] => options.activeAgentName === undefined
-        ? []
-        : [{ type: "custom", customType: "active_agent", data: { name: options.activeAgentName } }],
-      getSessionId: (): string => "issue-26-session",
-      getSessionDir: (): string => cwd,
-    },
-    ui: {
-      notify: (): void => {},
-      setStatus: (): void => {},
-      select: async (title: string): Promise<string | undefined> => {
-        prompts.push(title);
-        return options.selectResponse ?? "Allow Once";
-      },
-      input: async (): Promise<string | undefined> => options.inputResponse,
-    },
-  };
-}
-
 function createRuntimeHarness(
   config: GlobalPermissionConfig,
   toolNames: readonly string[],
@@ -156,7 +130,7 @@ function createRuntimeHarness(
     handlers,
     debugPath,
     cleanup: async (): Promise<void> => {
-      await Promise.resolve(handlers.session_shutdown?.({}, createMockContext(cwd, prompts, options)));
+      await Promise.resolve(handlers.session_shutdown?.({}, createMockContext(cwd, prompts, { sessionId: "issue-26-session", ...options })));
       if (originalAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {
@@ -185,7 +159,7 @@ async function runLifecycle(
 ): Promise<void> {
   const handler = harness.handlers[eventName];
   assert.equal(typeof handler, "function");
-  await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts, options)));
+  await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts, { sessionId: "issue-26-session", ...options })));
 }
 
 async function runToolCall(
@@ -195,7 +169,7 @@ async function runToolCall(
 ): Promise<Record<string, unknown>> {
   const handler = harness.handlers.tool_call;
   assert.equal(typeof handler, "function");
-  const result = await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts, options)));
+  const result = await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts, { sessionId: "issue-26-session", ...options })));
   return (result ?? {}) as Record<string, unknown>;
 }
 

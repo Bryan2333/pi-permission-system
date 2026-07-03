@@ -13,7 +13,7 @@ import {
   requestPermissionDecisionFromUi,
   type PermissionDecisionUi,
 } from "../src/permission-dialog.js";
-import { runAsyncTest } from "./test-harness.js";
+import { createMockContext, runAsyncTest } from "./test-harness.js";
 
 type MockHandler = (
   event: Record<string, unknown>,
@@ -47,31 +47,6 @@ function createPageSizedEditText(prefix: string, lineCount: number): string {
     { length: lineCount },
     (_value, index) => `${prefix}-line-${String(index + 1).padStart(3, "0")}: ${"x".repeat(88)}`,
   ).join("\n");
-}
-
-function createMockContext(
-  cwd: string,
-  prompts: string[],
-  selectResponse = "Reject",
-): Record<string, unknown> {
-  return {
-    cwd,
-    hasUI: true,
-    sessionManager: {
-      getEntries: (): unknown[] => [],
-      getSessionId: (): string => "issue-28-session",
-      getSessionDir: (): string => cwd,
-    },
-    ui: {
-      notify: (): void => {},
-      setStatus: (): void => {},
-      select: async (title: string): Promise<string | undefined> => {
-        prompts.push(title);
-        return selectResponse;
-      },
-      input: async (): Promise<string | undefined> => undefined,
-    },
-  };
 }
 
 function createToolCallHarness(): ToolCallHarness {
@@ -132,7 +107,7 @@ function createToolCallHarness(): ToolCallHarness {
     prompts,
     handlers,
     cleanup: async (): Promise<void> => {
-      await Promise.resolve(handlers.session_shutdown?.({}, createMockContext(cwd, prompts)));
+      await Promise.resolve(handlers.session_shutdown?.({}, createMockContext(cwd, prompts, { sessionId: "issue-28-session", hasUI: true, selectResponse: "Reject" })));
       for (const [key, value] of originalValues.entries()) {
         if (value === undefined) {
           delete process.env[key];
@@ -152,7 +127,7 @@ async function runToolCall(
   const handler = harness.handlers.tool_call;
   assert.equal(typeof handler, "function", "tool_call handler should be registered");
 
-  const result = await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts)));
+  const result = await Promise.resolve(handler(event, createMockContext(harness.cwd, harness.prompts, { sessionId: "issue-28-session", hasUI: true, selectResponse: "Reject" })));
   return (result ?? {}) as Record<string, unknown>;
 }
 
