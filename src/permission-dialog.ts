@@ -1,3 +1,5 @@
+import { getNonEmptyString } from "./common.js";
+
 export type PermissionDecisionState = "approved" | "denied" | "denied_with_reason" | "once" | "always" | "reject";
 
 export type PermissionPromptDecision = {
@@ -76,12 +78,7 @@ function compactPermissionPromptForSelect(value: string): string {
 }
 
 export function normalizePermissionDenialReason(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return getNonEmptyString(value) ?? undefined;
 }
 
 export function createDeniedPermissionDecision(

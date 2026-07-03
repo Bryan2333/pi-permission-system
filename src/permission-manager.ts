@@ -4,6 +4,7 @@ import { join, relative, resolve } from "node:path";
 
 import {
   extractFrontmatter,
+  findFirstMatchForNames,
   getNonEmptyString,
   isPermissionState,
   normalizePathResourceForPermission,
@@ -384,24 +385,42 @@ function toLayeredPermissionMatch(match: {
   };
 }
 
+function toLayeredMatchFromPattern(
+  pattern: { state: LayeredPermissionState; pattern: string },
+  name: string,
+): LayeredPermissionMatch {
+  return {
+    state: pattern.state.state,
+    matchedPattern: pattern.pattern,
+    matchedName: name,
+  };
+}
+
+function findLatestTrustedPatternMatching(
+  patterns: CompiledPermissionPatterns,
+  isMatch: (pattern: CompiledWildcardPattern<LayeredPermissionState>) => string | null,
+): LayeredPermissionMatch | null {
+  for (let index = patterns.length - 1; index >= 0; index -= 1) {
+    const pattern = patterns[index];
+    if (!pattern.state.trusted) {
+      continue;
+    }
+    const matchedName = isMatch(pattern);
+    if (matchedName !== null) {
+      return toLayeredMatchFromPattern(pattern, matchedName);
+    }
+  }
+
+  return null;
+}
+
 function findLatestTrustedPermissionMatch(
   patterns: CompiledPermissionPatterns,
   name: string,
 ): LayeredPermissionMatch | null {
-  for (let index = patterns.length - 1; index >= 0; index -= 1) {
-    const pattern = patterns[index];
-    if (!pattern.state.trusted || !pattern.regex.test(name)) {
-      continue;
-    }
-
-    return {
-      state: pattern.state.state,
-      matchedPattern: pattern.pattern,
-      matchedName: name,
-    };
-  }
-
-  return null;
+  return findLatestTrustedPatternMatching(patterns, (pattern) =>
+    pattern.regex.test(name) ? name : null,
+  );
 }
 
 function findCompiledPermissionMatch(
@@ -431,45 +450,21 @@ function findCompiledPermissionMatchForNames(
   patterns: CompiledPermissionPatterns,
   names: readonly string[],
 ): LayeredPermissionMatch | null {
-  if (patterns.length === 0) {
-    return null;
-  }
-
-  const normalizedNames = names.map((value) => value.trim()).filter((value) => value.length > 0);
-  for (const name of normalizedNames) {
-    const match = findCompiledPermissionMatch(patterns, name);
-    if (match) {
-      return match;
-    }
-  }
-
-  return null;
+  return findFirstMatchForNames(names, (name) => findCompiledPermissionMatch(patterns, name));
 }
 
 function findLatestTrustedPermissionMatchForNames(
   patterns: CompiledPermissionPatterns,
   names: readonly string[],
 ): LayeredPermissionMatch | null {
-  for (let index = patterns.length - 1; index >= 0; index -= 1) {
-    const pattern = patterns[index];
-    if (!pattern.state.trusted) {
-      continue;
-    }
-
+  return findLatestTrustedPatternMatching(patterns, (pattern) => {
     for (const name of names) {
-      if (!pattern.regex.test(name.replaceAll("\\", "/"))) {
-        continue;
+      if (pattern.regex.test(name.replaceAll("\\", "/"))) {
+        return name;
       }
-
-      return {
-        state: pattern.state.state,
-        matchedPattern: pattern.pattern,
-        matchedName: name,
-      };
     }
-  }
-
-  return null;
+    return null;
+  });
 }
 
 function findCompiledPermissionMatchByPatternOrderForNames(
@@ -499,11 +494,7 @@ function findCompiledPermissionMatchByPatternOrderForNames(
         }
       }
 
-      return {
-        state: pattern.state.state,
-        matchedPattern: pattern.pattern,
-        matchedName: name,
-      };
+      return toLayeredMatchFromPattern(pattern, name);
     }
   }
 
