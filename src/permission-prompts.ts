@@ -70,6 +70,11 @@ export function formatDenyReason(result: PermissionCheckResult, agentName?: stri
     parts.push(`command '${result.command}'`);
   }
 
+  const deniedUnit = result.bashChecks?.find((check) => check.state === "deny");
+  if (deniedUnit && deniedUnit.command !== result.command) {
+    parts.push(`because unit '${deniedUnit.command}' is denied`);
+  }
+
   if (result.matchedPattern) {
     parts.push(`(matched '${result.matchedPattern}')`);
   }
@@ -270,8 +275,12 @@ export function formatAskPrompt(result: PermissionCheckResult, agentName?: strin
   const subject = formatAgentSubject(agentName);
 
   if (result.toolName === "bash") {
+    const askedUnits = result.bashChecks?.filter((check) => check.state === "ask") ?? [];
+    const unitInfo = askedUnits.length > 0
+      ? ` Commands requiring approval: ${askedUnits.map((check) => `'${check.command}'`).join(", ")}.`
+      : "";
     const patternInfo = result.matchedPattern ? ` (matched '${result.matchedPattern}')` : "";
-    return `${subject} requested bash command '${result.command || ""}'${patternInfo}. Allow this command?`;
+    return `${subject} requested bash command '${result.command || ""}'${patternInfo}.${unitInfo} Allow this command?`;
   }
 
   if ((result.source === "mcp" || result.toolName === "mcp") && result.target) {

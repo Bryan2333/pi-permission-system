@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added Bash syntax-tree analysis for control operators, pipelines, nested shell constructs, substitutions, heredocs, and redirections.
+- Added per-command permission details to Bash prompts and review logs.
+
+### Changed
+- Bash rules now match each executable command unit and aggregate with `deny > ask > allow`; whole compound-command patterns no longer bypass rules for nested or chained commands.
+- Bash `Allow Always` approvals now match the exact original command string for the current session.
+
+### Security
+- Bash parse failures, oversized scripts, parser initialization failures, and dynamic command names now require confirmation instead of inheriting broad allow rules.
+
 ## [0.8.0] - 2026-07-03
 
 ### Changed

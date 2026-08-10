@@ -33,11 +33,27 @@ export interface GlobalPermissionConfig extends AgentPermissions {
   defaultPolicy: PermissionDefaultPolicy;
 }
 
+export type BashAnalysisStatus = "ok" | "unparseable" | "too_large" | "unavailable";
+
+export interface BashCommandUnit {
+  command: string;
+  startIndex: number;
+  endIndex: number;
+  kind: "command" | "opaque";
+}
+
+export interface BashPermissionCheck extends BashCommandUnit {
+  state: PermissionState;
+  matchedPattern?: string;
+}
+
 export interface PermissionCheckResult {
   toolName: string;
   state: PermissionState;
   matchedPattern?: string;
   command?: string;
+  bashAnalysisStatus?: BashAnalysisStatus;
+  bashChecks?: BashPermissionCheck[];
   target?: string;
   source: "tool" | "bash" | "mcp" | "skill" | "special" | "default";
 }

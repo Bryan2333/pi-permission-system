@@ -2,6 +2,22 @@ import { evaluatePermission, type PatternPermissionRule } from "./evaluate-permi
 
 export class SessionApprovalStore {
   private readonly rules: PatternPermissionRule[] = [];
+  private readonly exactApprovals = new Set<string>();
+
+  private exactApprovalKey(tool: string, subject: string): string {
+    return JSON.stringify([tool.trim(), subject]);
+  }
+
+  approveExact(tool: string, subject: string): void {
+    if (!tool.trim() || !subject) {
+      return;
+    }
+    this.exactApprovals.add(this.exactApprovalKey(tool, subject));
+  }
+
+  hasExactApproval(tool: string, subject: string): boolean {
+    return this.exactApprovals.has(this.exactApprovalKey(tool, subject));
+  }
 
   approveAlways(tool: string, pattern: string): void {
     const normalizedTool = tool.trim();
@@ -38,5 +54,6 @@ export class SessionApprovalStore {
 
   clear(): void {
     this.rules.length = 0;
+    this.exactApprovals.clear();
   }
 }

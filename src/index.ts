@@ -508,12 +508,14 @@ function getPermissionLogContext(
   result: PermissionCheckResult,
   input: unknown,
 ): {
+  bashChecks?: PermissionCheckResult["bashChecks"];
   command?: string;
   commandMetadata: SensitiveLogMetadata | null;
   target?: string;
   toolInput: unknown;
 } {
   return {
+    bashChecks: result.toolName === "bash" ? result.bashChecks : undefined,
     command: result.toolName === "bash" && result.command ? result.command : undefined,
     commandMetadata: createSensitiveLogMetadata(result.command),
     target: result.target,
@@ -564,6 +566,16 @@ function applyPatternApprovalState(
   }
 
   const subject = getPatternApprovalSubject(result, input);
+  if (result.toolName === "bash") {
+    if (
+      result.state === "ask"
+      && sessionApprovals.hasExactApproval(result.toolName, subject)
+    ) {
+      return { ...result, state: "allow" };
+    }
+    return result;
+  }
+
   const evaluated = evaluatePermission(
     result.toolName,
     subject,
@@ -607,7 +619,11 @@ function persistSessionApprovalDecision(
     return null;
   }
 
-  sessionApprovals.approveAlways(result.toolName, subject);
+  if (result.toolName === "bash") {
+    sessionApprovals.approveExact(result.toolName, subject);
+  } else {
+    sessionApprovals.approveAlways(result.toolName, subject);
+  }
   return { subject, persistence: "session" };
 }
 

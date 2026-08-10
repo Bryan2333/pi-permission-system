@@ -147,7 +147,7 @@ runTest("ISSUE-24-FIX: BashFilter.check multi-line heredoc command DOES match wi
   );
 });
 
-runTest("ISSUE-24-FIX: BashFilter.check multi-line matches wildcard instead of exact pattern (expected-failing TDD)", () => {
+runTest("BashFilter ignores trailing comments when authorizing commands", () => {
   // Last-match-wins: more specific patterns at the end are tested first.
   const filter = new BashFilter(
     {
@@ -170,21 +170,18 @@ runTest("ISSUE-24-FIX: BashFilter.check multi-line matches wildcard instead of e
   assert.equal(genericResult.state, "deny");
   assert.equal(genericResult.matchedPattern, "git *");
 
-  // Multi-line with 'git status --short\n# with trailing comment':
-  //   - Exact pattern 'git status --short' doesn't match (trailing content)
-  //   - Wildcard 'git *' DOES match (with 's' flag, '.*' matches newlines)
-  //   - Result: deny (from 'git *')
+  // Comments are not execution units, so the exact command remains allowed.
   const multiline = "git status --short\n# with trailing comment";
   const multiResult = filter.check(multiline);
   assert.equal(
     multiResult.state,
-    "deny",
-    "ISSUE-24-TDD: Expected multi-line to match 'git *' (deny). With 's' flag, '.*' will match across newlines, so 'git *' should match this command",
+    "allow",
+    "The parser should authorize the executable command without its trailing comment",
   );
   assert.equal(
     multiResult.matchedPattern,
-    "git *",
-    "ISSUE-24-TDD: Expected matchedPattern to be 'git *' — exact pattern won't match (trailing content), but wildcard 'git *' should match with 's' flag",
+    "git status --short",
+    "The exact command rule should win after comments are excluded",
   );
 });
 
@@ -241,21 +238,19 @@ runTest("ISSUE-24-FIX-EDGE: Mixed line endings in same command (expected-failing
   );
 });
 
-runTest("ISSUE-24-FIX-EDGE: Command with leading newline (expected-failing TDD)", () => {
+runTest("BashFilter ignores leading whitespace outside the command unit", () => {
   const filter = new BashFilter({ "*": "deny", "python *": "allow" }, "deny");
   const leadingNewline = "\npython script.py";
   const result = filter.check(leadingNewline);
-  // With 's' flag: 'python *' still doesn't match (^ requires start with "python "),
-  // but '*' catch-all matches. So the result is "deny" from '*'.
   assert.equal(
     result.state,
-    "deny",
-    "ISSUE-24-TDD: Leading newline prevents 'python *' from matching (string starts with \\n, not 'python '). However, '*' (catch-all) should match, yielding 'deny'. Currently ALL patterns fail — matchedPattern should be '*' after fix",
+    "allow",
+    "The parsed command should match the python allow rule",
   );
   assert.equal(
     result.matchedPattern,
-    "*",
-    "ISSUE-24-TDD: Expected matchedPattern '*' for leading newline — 'python *' can't match (wrong start), but '*' should match the whole string with 's' flag",
+    "python *",
+    "Leading whitespace outside the command should not affect matching",
   );
 });
 
@@ -356,12 +351,12 @@ runTest("ISSUE-24-FIX-EDGE: Here-string syntax (expected-failing TDD)", () => {
 // Section 5: Edge cases — deeply nested delimiters and complex heredocs
 // ===========================================================================
 
-runTest("ISSUE-24-FIX-EDGE: Multiple heredocs in one command (chained) (expected-failing TDD)", () => {
+runTest("BashFilter asks for malformed chained heredocs", () => {
   const filter = new BashFilter({ "*": "deny", "cat *": "allow" }, "deny");
   const multiHeredoc = "cat <<'A'\nfile1\nA\n<<'B'\nfile2\nB";
   const result = filter.check(multiHeredoc);
-  assert.equal(result.state, "allow", "ISSUE-24-TDD: Chained multiple heredocs should match 'cat *'");
-  assert.equal(result.matchedPattern, "cat *");
+  assert.equal(result.state, "ask", "Malformed shell syntax must not be silently allowed");
+  assert.equal(result.bashAnalysisStatus, "unparseable");
 });
 
 runTest("ISSUE-24-FIX-EDGE: Heredoc delimiter containing wildcard-matching characters (expected-failing TDD)", () => {
@@ -384,7 +379,7 @@ runTest("ISSUE-24-FIX-EDGE: Command with tabs before heredoc content (expected-f
 // Section 6: Edge cases — last-match-wins precedence interaction
 // ===========================================================================
 
-runTest("ISSUE-24-FIX-EDGE: Last-match-wins precedence with multi-line resolves to wildcard (expected-failing TDD)", () => {
+runTest("Last-match precedence applies to parsed commands without trailing comments", () => {
   // Patterns from the existing test suite: last specific wins
   const filter = new BashFilter(
     {
@@ -408,20 +403,19 @@ runTest("ISSUE-24-FIX-EDGE: Last-match-wins precedence with multi-line resolves 
   assert.equal(singleGitResult.state, "deny", "Single-line git command matches 'git *'");
   assert.equal(singleGitResult.matchedPattern, "git *");
 
-  // Multi-line: exact pattern won't match (trailing content), but 'git *'
-  // will match with the 's' flag fix. Result: deny.
+  // The comment is not an execution unit, so the exact allow remains decisive.
   const multiline = "git status --short\n# trailing";
   const result = filter.check(multiline);
 
   assert.equal(
     result.state,
-    "deny",
-    "ISSUE-24-TDD: Multi-line with complex precedence should match 'git *' (deny). Exact pattern 'git status --short' won't match (trailing content), but 'git *' wildcard should match with 's' flag",
+    "allow",
+    "The parsed command should retain its exact allow",
   );
   assert.equal(
     result.matchedPattern,
-    "git *",
-    "ISSUE-24-TDD: Expected matchedPattern 'git *' — exact pattern is too restrictive for command with trailing content, so wildcard 'git *' should match",
+    "git status --short",
+    "The exact command rule should match after the comment is excluded",
   );
 });
 

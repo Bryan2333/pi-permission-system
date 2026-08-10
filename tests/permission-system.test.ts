@@ -931,6 +931,46 @@ await runAsyncTest("OpenCode-style Allow Always approves matching requests for t
   }
 });
 
+await runAsyncTest("Bash Allow Always stores the exact compound command", async () => {
+  const harness = createToolCallHarness(
+    {
+      defaultPolicy: { tools: "allow", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    },
+    ["bash"],
+  );
+
+  try {
+    const approvedCommand = "printf '*' && git status";
+    const first = await runToolCall(
+      harness,
+      {
+        toolName: "bash",
+        toolCallId: "allow-exact-compound-first",
+        input: { command: approvedCommand },
+      },
+      { hasUI: true, selectResponse: "Allow Always" },
+    );
+    assert.deepEqual(first, {});
+
+    const repeated = await runToolCall(harness, {
+      toolName: "bash",
+      toolCallId: "allow-exact-compound-repeat",
+      input: { command: approvedCommand },
+    });
+    assert.deepEqual(repeated, {});
+
+    const different = await runToolCall(harness, {
+      toolName: "bash",
+      toolCallId: "allow-exact-compound-different",
+      input: { command: "printf 'anything' && git status" },
+    });
+    assert.equal(different.block, true);
+    assert.match(String(different.reason), /requires approval, but no interactive UI is available/i);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
 await runAsyncTest("OpenCode-style Reject with Reason prompts for feedback and returns it to the agent", async () => {
   const harness = createToolCallHarness(
     {

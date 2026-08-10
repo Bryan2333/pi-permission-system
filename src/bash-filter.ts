@@ -1,4 +1,10 @@
-import type { BashPermissions, PermissionState } from "./types.js";
+import { evaluateShellCommandPermissions } from "./shell-command-analyzer.js";
+import type {
+  BashAnalysisStatus,
+  BashPermissionCheck as BashUnitPermissionCheck,
+  BashPermissions,
+  PermissionState,
+} from "./types.js";
 import {
   compileWildcardPatterns,
   findCompiledWildcardMatch,
@@ -17,6 +23,8 @@ export interface BashPermissionCheck {
   state: PermissionState;
   matchedPattern?: string;
   command: string;
+  bashAnalysisStatus: BashAnalysisStatus;
+  bashChecks: BashUnitPermissionCheck[];
 }
 
 export class BashFilter {
@@ -32,18 +40,18 @@ export class BashFilter {
   }
 
   check(command: string): BashPermissionCheck {
-    const match = findCompiledWildcardMatch(this.compiledPatterns, command);
-    if (match) {
-      return {
-        state: match.state,
-        matchedPattern: match.matchedPattern,
-        command,
-      };
-    }
+    const evaluation = evaluateShellCommandPermissions(
+      command,
+      this.defaultState,
+      (unit) => findCompiledWildcardMatch(this.compiledPatterns, unit),
+    );
 
     return {
-      state: this.defaultState,
+      state: evaluation.state,
+      matchedPattern: evaluation.matchedPattern,
       command,
+      bashAnalysisStatus: evaluation.analysisStatus,
+      bashChecks: evaluation.checks,
     };
   }
 }

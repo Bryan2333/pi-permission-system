@@ -20,6 +20,7 @@ import type {
   PermissionDefaultPolicy,
   PermissionState,
 } from "./types.js";
+import { evaluateShellCommandPermissions } from "./shell-command-analyzer.js";
 import {
   compileWildcardPatternEntries,
   findCompiledWildcardMatch,
@@ -944,16 +945,22 @@ export class PermissionManager {
     if (normalizedToolName === "bash") {
       const record = toRecord(input);
       const command = typeof record.command === "string" ? record.command : "";
-      const result = findCompiledPermissionMatch(compiledBash, command);
+      const fallbackState = toolMatch?.state
+        ?? resolveLayeredDefaultPermission(layers, "bash")?.state
+        ?? DEFAULT_POLICY.bash;
+      const evaluation = evaluateShellCommandPermissions(
+        command,
+        fallbackState,
+        (unit) => findCompiledPermissionMatch(compiledBash, unit),
+      );
 
       return {
         toolName,
-        state: result?.state
-          ?? toolMatch?.state
-          ?? resolveLayeredDefaultPermission(layers, "bash")?.state
-          ?? DEFAULT_POLICY.bash,
+        state: evaluation.state,
         command,
-        matchedPattern: result?.matchedPattern,
+        matchedPattern: evaluation.matchedPattern,
+        bashAnalysisStatus: evaluation.analysisStatus,
+        bashChecks: evaluation.checks,
         source: "bash",
       };
     }

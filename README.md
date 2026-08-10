@@ -166,7 +166,7 @@ All permissions use one of three states:
 | `deny`  | Blocks the action with an error message     |
 | `ask`   | Prompts the user for confirmation via UI    |
 
-When an `ask` permission prompts, the confirmation UI offers `Allow Once`, `Allow Always`, `Reject`, and `Reject with Reason`. `Allow Once` approves only the current request. `Allow Always` records an explicit matching approval for the current session only (in-memory, not persisted to disk), while plain `Reject` and `Reject with Reason` deny only the current request and do not silently become future defaults. YOLO/auto-response approvals also do not create saved approval rules; after YOLO mode is disabled, matching `ask` requests require approval again. A configured `deny` remains a hard boundary and is not relaxed by prior one-shot, auto-response, or saved approvals.
+When an `ask` permission prompts, the confirmation UI offers `Allow Once`, `Allow Always`, `Reject`, and `Reject with Reason`. `Allow Once` approves only the current request. `Allow Always` records an explicit matching approval for the current session only (in-memory, not persisted to disk); for Bash, it stores the exact original command string rather than treating command characters such as `*` as permission wildcards. Plain `Reject` and `Reject with Reason` deny only the current request and do not silently become future defaults. YOLO/auto-response approvals also do not create saved approval rules; after YOLO mode is disabled, matching `ask` requests require approval again. A configured `deny` remains a hard boundary and is not relaxed by prior one-shot, auto-response, or saved approvals.
 
 ### Pi Integration Hooks
 
@@ -376,7 +376,7 @@ Action-scoped resource rules still respect normal permission guardrails: matchin
 
 ### `bash`
 
-Command patterns use `*` wildcards and match against the full command string. If multiple patterns match, the **last declared matching rule wins**. Put broad fallback rules first and more specific overrides later.
+Command patterns use `*` wildcards and match each syntactically executable Bash command independently. If multiple patterns match one command unit, the **last declared matching rule wins**. The result for the complete script is the most restrictive unit result: `deny`, then `ask`, then `allow`.
 
 ```jsonc
 {
@@ -387,6 +387,12 @@ Command patterns use `*` wildcards and match against the full command string. If
   }
 }
 ```
+
+This includes commands separated by `&&`, `||`, `;`, newlines, pipelines, and background operators, plus commands nested in subshells, functions, conditionals, loops, command substitutions, process substitutions, and expandable heredocs. Quoted or escaped operator text remains part of its command. For example, `git status && npm test` checks `git status` and `npm test` separately, while `echo "a && b"` is one command unit.
+
+Rules that match an entire compound script are not special overrides. Configure its individual command units instead. Invalid syntax, oversized input, an unavailable parser, or a dynamically expanded command name falls back to `ask` unless a matching rule already denies it.
+
+The extension authorizes the agent-supplied Bash string seen by the tool-call hook. It is not a process sandbox and cannot authorize behavior hidden inside executables, sourced files, `eval`, package scripts, Git hooks, or command changes applied later by Pi's shell prefix or spawn hooks.
 
 ### `mcp`
 
