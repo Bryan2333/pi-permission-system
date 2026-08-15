@@ -378,6 +378,8 @@ Action-scoped resource rules still respect normal permission guardrails: matchin
 
 Command patterns use `*` wildcards and match each syntactically executable Bash command independently. If multiple patterns match one command unit, the **last declared matching rule wins**. The result for the complete script is the most restrictive unit result: `deny`, then `ask`, then `allow`.
 
+Output redirections are protected separately: an `allow` rule such as `echo *` does not authorize `echo aaaa > file`. Add an explicit rule containing the redirection syntax, such as `echo * > *`, or approve the exact command for the current session. Input redirections, heredocs, and fd duplication such as `2>&1` (which writes no file) remain part of the command text matched by the normal rule.
+
 ```jsonc
 {
   "bash": {

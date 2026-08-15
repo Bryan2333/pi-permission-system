@@ -24,6 +24,7 @@ const DYNAMIC_COMMAND_NAME_TYPES = new Set([
   "process_substitution",
   "simple_expansion",
 ]);
+const OUTPUT_REDIRECT_OPERATORS = new Set([">", ">>", ">|", "&>", "&>>", ">&", "<>"]);
 
 let parser: Parser | null = null;
 
@@ -83,6 +84,18 @@ function isNestedAssignment(node: Node): boolean {
   return false;
 }
 
+function hasOutputRedirect(node: Node): boolean {
+  return node.descendantsOfType("file_redirect").some((redirect) =>
+    redirect?.children.some((child, index) => {
+      if (!child || !OUTPUT_REDIRECT_OPERATORS.has(child.type)) {
+        return false;
+      }
+      // `>&` to a numbered fd (e.g. 2>&1) duplicates the descriptor without writing a file.
+      return child.type !== ">&" || redirect.children[index + 1]?.type !== "number";
+    }) === true,
+  );
+}
+
 function toUnit(node: Node): BashCommandUnit | null {
   if ((node.type === "variable_assignment" || node.type === "variable_assignments") && isNestedAssignment(node)) {
     return null;
@@ -90,11 +103,13 @@ function toUnit(node: Node): BashCommandUnit | null {
 
   const parent = node.parent;
   const selected = parent?.type === "redirected_statement" ? parent : node;
+  const outputRedirect = hasOutputRedirect(selected);
   return {
     command: selected.text,
     startIndex: selected.startIndex,
     endIndex: selected.endIndex,
-    kind: hasDynamicCommandName(node) ? "opaque" : "command",
+    kind: hasDynamicCommandName(node) ? "opaque" : outputRedirect ? "output_redirect" : "command",
+    hasOutputRedirect: outputRedirect,
   };
 }
 
@@ -103,7 +118,7 @@ function opaqueAnalysis(command: string, status: Exclude<BashAnalysisStatus, "ok
   return {
     status,
     units: command
-      ? [{ command, startIndex: 0, endIndex: commandBytes, kind: "opaque" }]
+      ? [{ command, startIndex: 0, endIndex: commandBytes, kind: "opaque", hasOutputRedirect: false }]
       : [],
   };
 }
@@ -155,11 +170,13 @@ export function analyzeShellCommand(command: string): BashCommandAnalysis {
       }
       const key = `${node.startIndex}:${node.endIndex}`;
       if (!unitsBySpan.has(key)) {
+        const outputRedirect = hasOutputRedirect(node);
         unitsBySpan.set(key, {
           command: node.text,
           startIndex: node.startIndex,
           endIndex: node.endIndex,
-          kind: "command",
+          kind: outputRedirect ? "output_redirect" : "command",
+          hasOutputRedirect: outputRedirect,
         });
       }
     }
@@ -186,7 +203,13 @@ export function evaluateShellCommandPermissions(
   const checks = analysis.units.map((unit) => {
     const match = evaluateUnit(unit.command);
     const matchedState = match?.state ?? fallbackState;
-    const state = (analysis.status !== "ok" || unit.kind === "opaque") && matchedState !== "deny"
+    // A `>` inside a quoted section of the pattern (e.g. `sed 's/>//' *`) is a literal, not a redirect.
+    const explicitRedirectRule = match?.matchedPattern?.replace(/"[^"]*"|'[^']*'/g, "").includes(">") === true;
+    const state = (
+      analysis.status !== "ok"
+      || unit.kind === "opaque"
+      || (unit.hasOutputRedirect && matchedState !== "deny" && !explicitRedirectRule)
+    ) && matchedState !== "deny"
       ? "ask"
       : matchedState;
     return {

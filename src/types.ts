@@ -39,7 +39,8 @@ export interface BashCommandUnit {
   command: string;
   startIndex: number;
   endIndex: number;
-  kind: "command" | "opaque";
+  kind: "command" | "opaque" | "output_redirect";
+  hasOutputRedirect: boolean;
 }
 
 export interface BashPermissionCheck extends BashCommandUnit {

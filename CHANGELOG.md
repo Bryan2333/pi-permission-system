@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Bash rules now match each executable command unit and aggregate with `deny > ask > allow`; whole compound-command patterns no longer bypass rules for nested or chained commands.
+- Bash output redirections now require an explicit matching rule instead of inheriting a plain command allow (for example, `echo *` no longer allows `echo aaaa > file`); fd duplication such as `2>&1` writes no file and stays covered by the plain rule.
 - Bash `Allow Always` approvals now match the exact original command string for the current session.
 
 ### Security

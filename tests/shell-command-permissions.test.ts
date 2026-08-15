@@ -54,6 +54,21 @@ runTest("Bash analyzer respects heredoc expansion rules and redirections", () =>
 
   const redirect = analyzeShellCommand("echo hi > output.txt\n> empty.txt");
   assert.deepEqual(redirect.units.map((unit) => unit.command), ["echo hi > output.txt", "> empty.txt"]);
+  assert.deepEqual(redirect.units.map((unit) => unit.hasOutputRedirect), [true, true]);
+  assert.deepEqual(redirect.units.map((unit) => unit.kind), ["output_redirect", "output_redirect"]);
+
+  const inputRedirect = analyzeShellCommand("cat < input.txt");
+  assert.equal(inputRedirect.units[0]?.hasOutputRedirect, false);
+
+  const fdDup = analyzeShellCommand("git status 2>&1");
+  assert.equal(fdDup.units[0]?.hasOutputRedirect, false);
+  assert.equal(fdDup.units[0]?.kind, "command");
+
+  const fdDupToWord = analyzeShellCommand("echo a >& file");
+  assert.equal(fdDupToWord.units[0]?.hasOutputRedirect, true);
+
+  const appendAll = analyzeShellCommand("echo a &>> file");
+  assert.equal(appendAll.units[0]?.hasOutputRedirect, true);
 });
 
 runTest("Bash analyzer marks uncertain input as opaque", () => {
@@ -82,6 +97,19 @@ runTest("PermissionManager authorizes every Bash execution unit", () => {
     assert.equal(allowed.state, "allow");
     assert.deepEqual(allowed.bashChecks?.map((check) => check.state), ["allow", "allow"]);
 
+    const echoAllowed = manager.checkPermission("bash", { command: "echo aaaa" });
+    assert.equal(echoAllowed.state, "allow");
+
+    const fdDupAllowed = manager.checkPermission("bash", { command: "echo aaaa 2>&1" });
+    assert.equal(fdDupAllowed.state, "allow");
+
+    const redirectAsked = manager.checkPermission("bash", { command: "echo aaaa > file" });
+    assert.equal(redirectAsked.state, "ask");
+    assert.equal(redirectAsked.bashChecks?.[0]?.kind, "output_redirect");
+
+    const appendAllAsked = manager.checkPermission("bash", { command: "echo aaaa &>> file" });
+    assert.equal(appendAllAsked.state, "ask");
+
     const asked = manager.checkPermission("bash", { command: "git status && pnpm test && git commit" });
     assert.equal(asked.state, "ask");
     assert.equal(asked.bashChecks?.find((check) => check.state === "ask")?.command, "pnpm test");
@@ -91,6 +119,36 @@ runTest("PermissionManager authorizes every Bash execution unit", () => {
     assert.equal(denied.bashChecks?.find((check) => check.state === "deny")?.command, "rm -rf build");
   } finally {
     cleanup();
+  }
+});
+
+runTest("Bash output redirects require an explicit redirect rule", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    bash: {
+      "echo *": "allow",
+      "echo * > *": "allow",
+    },
+  });
+
+  try {
+    const result = manager.checkPermission("bash", { command: "echo aaaa > file" });
+    assert.equal(result.state, "allow");
+    assert.equal(result.matchedPattern, "echo * > *");
+  } finally {
+    cleanup();
+  }
+
+  const quoted = createManager({
+    defaultPolicy: { tools: "ask", bash: "ask", mcp: "ask", skills: "ask", special: "ask" },
+    bash: { "sed 's/>//' *": "allow" },
+  });
+
+  try {
+    const result = quoted.manager.checkPermission("bash", { command: "sed 's/>//' x > /etc/passwd" });
+    assert.equal(result.state, "ask");
+  } finally {
+    quoted.cleanup();
   }
 });
 
