@@ -1,0 +1,12 @@
+# pnpm 11: settings moved from package.json "pnpm" field to this file.
+# https://pnpm.io/settings
+
+overrides:
+  protobufjs: 7.6.3
+  ws: 8.21.0
+
+allowBuilds:
+  tree-sitter-bash: true
+  koffi: true
+  protobufjs: true
+  '@google/genai': true
