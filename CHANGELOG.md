@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added Bash syntax-tree analysis for control operators, pipelines, nested shell constructs, substitutions, heredocs, and redirections.
 - Added per-command permission details to Bash prompts and review logs.
+- `edit` tool calls that cannot be applied to the current file content (stale or duplicate `oldText`, missing target file, overlapping or no-op replacements, empty `oldText`) are now blocked silently with Pi's own edit-tool error text instead of prompting the user to approve a doomed edit.
 
 ### Changed
 - Bash rules now match each executable command unit and aggregate with `deny > ask > allow`; whole compound-command patterns no longer bypass rules for nested or chained commands.
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - Bash parse failures, oversized scripts, parser initialization failures, and dynamic command names now require confirmation instead of inheriting broad allow rules.
+- `file://` URLs in path-bearing tool inputs now resolve before external-directory checks, so `special.external_directory` policy applies to them instead of treating them as in-worktree paths.
 
 ## [0.8.0] - 2026-07-03
 

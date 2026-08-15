@@ -1,8 +1,11 @@
 import { homedir } from "node:os";
 import { join, normalize, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionState } from "./types.js";
+
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 export function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -54,21 +57,50 @@ export function isPermissionState(value: unknown): value is PermissionState {
   return value === "allow" || value === "deny" || value === "ask";
 }
 
+/**
+ * Expands a path value the same way pi-coding-agent `path-utils.js`
+ * `resolveToCwd` does before joining it with the working directory:
+ * Unicode spaces fold to regular spaces, a leading `@` is stripped, `~`
+ * expands to the home directory, and `file://` URLs resolve to real paths.
+ * Malformed `file:` URLs fall back to the literal value instead of throwing
+ * on untrusted tool input.
+ */
+export function expandPathValue(pathValue: string): string {
+  let normalizedPath = pathValue.replace(UNICODE_SPACES, " ");
+
+  if (normalizedPath.startsWith("@")) {
+    normalizedPath = normalizedPath.slice(1);
+  }
+
+  if (normalizedPath === "~") {
+    normalizedPath = homedir();
+  } else if (
+    normalizedPath.startsWith("~/")
+    || (process.platform === "win32" && normalizedPath.startsWith("~\\"))
+  ) {
+    normalizedPath = join(homedir(), normalizedPath.slice(2));
+  }
+
+  if (/^file:\/\//.test(normalizedPath)) {
+    try {
+      normalizedPath = fileURLToPath(normalizedPath);
+    } catch {
+      // Malformed file: URL; keep the literal value so callers fall back to
+      // their normal resolution instead of crashing on untrusted input.
+    }
+  }
+
+  return normalizedPath;
+}
+
 export function normalizePathForComparison(pathValue: string, cwd: string): string {
   const trimmed = pathValue.trim().replace(/^["']|["']$/g, "");
   if (!trimmed) {
     return "";
   }
 
-  let normalizedPath = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-
-  if (normalizedPath === "~") {
-    normalizedPath = homedir();
-  } else if (normalizedPath.startsWith("~/") || normalizedPath.startsWith("~\\")) {
-    normalizedPath = join(homedir(), normalizedPath.slice(2));
-  }
-
-  const absolutePath = resolve(cwd, normalizedPath);
+  const expandedPath = expandPathValue(trimmed);
+  const absolutePath = resolve(cwd, expandedPath);
   const normalizedAbsolutePath = normalize(absolutePath);
   return process.platform === "win32" ? normalizedAbsolutePath.toLowerCase() : normalizedAbsolutePath;
 }

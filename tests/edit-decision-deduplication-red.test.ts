@@ -127,6 +127,7 @@ function createToolCallHarness(selectResponses: string[] = []): ToolCallHarness 
   }
 
   mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(cwd, "src"), { recursive: true });
   mkdirSync(join(policyDir, "agents"), { recursive: true });
   writeFileSync(
     join(policyDir, "pi-permissions.jsonc"),
@@ -134,6 +135,7 @@ function createToolCallHarness(selectResponses: string[] = []): ToolCallHarness 
     "utf8",
   );
   writeFileSync(extensionConfigPath, `${JSON.stringify(DEFAULT_EXTENSION_CONFIG, null, 2)}\n`, "utf8");
+  writeFileSync(join(cwd, "src", "repeated-edit.ts"), "export const answer = 41;\n", "utf8");
 
   process.env.PI_CODING_AGENT_DIR = policyDir;
   process.env[PI_PERMISSION_SYSTEM_POLICY_AGENT_DIR_ENV_KEY] = policyDir;

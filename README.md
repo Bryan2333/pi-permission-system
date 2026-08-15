@@ -188,6 +188,7 @@ The extension integrates via Pi's lifecycle hooks:
 - Path-bearing file tools (`read`, `write`, `edit`, `find`, `grep`, `ls`) evaluate `special.external_directory` before their normal tool permission when an explicit path points outside `ctx.cwd`
 - `read` calls under global and project Pi skill directories are checked against `skills` policy even when the skill entry is inferred from the path rather than an active prompt block.
 - Structured edit payloads are summarized by operation and line count in prompts so permission decisions do not require raw multiline JSON.
+- `edit` calls that resolve to `ask` are pre-validated against the current file content: edits that cannot possibly apply (stale or duplicate `oldText`, missing target file, overlapping or no-op replacements, empty `oldText`) are blocked silently with Pi's own edit-tool error text instead of prompting, so the agent can correct the payload and retry.
 
 ## Configuration
 

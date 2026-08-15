@@ -48,6 +48,7 @@ import {
   type ForwardedPermissionResponse,
   type PermissionForwardingLocation,
 } from "./permission-forwarding.js";
+import { checkEditPreflight, type EditPreflightResult } from "./edit-preflight.js";
 import { evaluatePermission, type PatternPermissionRule } from "./evaluate-permission.js";
 import {
   formatAskPrompt,
@@ -2204,6 +2205,25 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           : `Using tool '${toolName}' requires approval, but no interactive UI is available.`;
 
       const message = formatAskPrompt(check, agentName ?? undefined, input);
+      // Pre-flight feasibility check for Pi's edit tool: an edit that cannot be
+      // applied to the current file content (stale oldText, duplicate anchor,
+      // missing file, overlapping or no-op replacements, ...) is guaranteed to
+      // fail inside the tool, so asking the user to approve it is pure noise.
+      // The check runs only after any external-directory confirmation, so the
+      // target file is not read before the user approves access to it.
+      const editPreflight = toolName === "edit" && ctx.cwd
+        ? await checkEditPreflight(input, ctx.cwd).catch(() => null)
+        : null;
+      if (editPreflight && !editPreflight.feasible) {
+        writeReviewEntry("permission_request.blocked", {
+          ...buildToolCallBlockedEntryFields(event.toolCallId, toolName, agentName),
+          ...permissionLogContext,
+          resolution: "edit_preflight_failed",
+          preflightReason: editPreflight.reason,
+        });
+        await extensionLogger.flush();
+        return { block: true, reason: editPreflight.reason };
+      }
       if (!canRequestPermissionConfirmation(ctx)) {
         writeReviewEntry("permission_request.blocked", {
           ...buildToolCallBlockedEntryFields(event.toolCallId, toolName, agentName),

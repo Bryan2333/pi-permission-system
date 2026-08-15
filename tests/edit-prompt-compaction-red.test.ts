@@ -70,6 +70,7 @@ function createToolCallHarness(): ToolCallHarness {
   }
 
   mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(cwd, "src"), { recursive: true });
   mkdirSync(join(policyDir, "agents"), { recursive: true });
   writeFileSync(
     join(policyDir, "pi-permissions.jsonc"),
@@ -139,6 +140,8 @@ await runAsyncTest("ISSUE28: edit tool_call permission prompt summarizes page-si
 
     const oldText = createPageSizedEditText("old", 160);
     const newText = createPageSizedEditText("new", 160);
+    // The preflight check reads the edit target, so the simulated file must exist.
+    writeFileSync(join(harness.cwd, "src", "large-page.ts"), `${oldText}\n`, "utf8");
     const result = await runToolCall(harness, {
       toolName: "edit",
       toolCallId: "issue-28-large-edit",
