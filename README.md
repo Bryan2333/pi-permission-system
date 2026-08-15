@@ -1,9 +1,9 @@
 <div align="center">
 
-# pi-permission-system
+# @bryan2333/pi-permission-system
 
-[![npm version](https://img.shields.io/npm/v/pi-permission-system?style=for-the-badge)](https://www.npmjs.com/package/pi-permission-system)
-[![License](https://img.shields.io/github/license/MasuRii/pi-permission-system?style=for-the-badge)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/@bryan2333%2Fpi-permission-system?style=for-the-badge)](https://www.npmjs.com/package/@bryan2333/pi-permission-system)
+[![License](https://img.shields.io/github/license/Bryan2333/pi-permission-system?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=for-the-badge)]()
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y01PSSVR)
@@ -116,7 +116,7 @@ If you are coming from OpenCode, you usually do **not** need to rewrite your who
 ### npm package
 
 ```bash
-pi install npm:pi-permission-system
+pi install npm:@bryan2333/pi-permission-system
 ```
 
 ### Local extension folder

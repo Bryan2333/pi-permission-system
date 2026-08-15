@@ -1,5 +1,5 @@
 {
-  "name": "pi-permission-system",
+  "name": "@bryan2333/pi-permission-system",
   "version": "0.8.0",
   "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
@@ -39,15 +39,15 @@
     "authorization",
     "security"
   ],
-  "author": "MasuRii",
+  "author": "Bryan2333",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MasuRii/pi-permission-system.git"
+    "url": "git+https://github.com/Bryan2333/pi-permission-system.git"
   },
-  "homepage": "https://github.com/MasuRii/pi-permission-system#readme",
+  "homepage": "https://github.com/Bryan2333/pi-permission-system#readme",
   "bugs": {
-    "url": "https://github.com/MasuRii/pi-permission-system/issues"
+    "url": "https://github.com/Bryan2333/pi-permission-system/issues"
   },
   "engines": {
     "node": ">=20",
