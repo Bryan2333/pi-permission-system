@@ -232,6 +232,10 @@ declare module "@earendil-works/pi-tui" {
     values: readonly string[] | string[];
   }
 
+  export type KeyId = string;
+  export function matchesKey(data: string, keyId: KeyId): boolean;
+  export function getKeybindings(): { matches(data: string, keybinding: string): boolean };
+
   export class Box {
     constructor(...args: any[]);
     addChild(...args: any[]): void;

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added a scrollable "View Full Command" permission prompt viewer (keyboard ↑↓/PgUp/PgDn/Home/End), so compacted prompts can be inspected in full before deciding.
 - Added Bash syntax-tree analysis for control operators, pipelines, nested shell constructs, substitutions, heredocs, and redirections.
 - Added per-command permission details to Bash prompts and review logs.
 - `edit` tool calls that cannot be applied to the current file content (stale or duplicate `oldText`, missing target file, overlapping or no-op replacements, empty `oldText`) are now blocked silently with Pi's own edit-tool error text instead of prompting the user to approve a doomed edit.

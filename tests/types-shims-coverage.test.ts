@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -232,13 +232,27 @@ runTest("PR13: @earendil-works/pi-tui shim types are redundant with real package
 // ===========================================================================
 
 runTest("PR13: @types/node IS available transitively — node:* shims are REDUNDANT", () => {
-  const typesNodePath = join(EXTENSION_ROOT, "node_modules", "@types", "node");
+  // pnpm keeps transitive deps in .pnpm/<name>+<version>/node_modules/...;
+  // non-pnpm installs place them flat at node_modules/@types/node.
+  const pnpmRoot = join(EXTENSION_ROOT, "node_modules", ".pnpm");
+  let typesNodePath: string | undefined;
+  if (existsSync(pnpmRoot)) {
+    typesNodePath = readdirSync(pnpmRoot)
+      .filter((dir) => dir.startsWith("@types+node@"))
+      .map((dir) => join(pnpmRoot, dir, "node_modules", "@types", "node"))
+      .find((candidate) => existsSync(join(candidate, "index.d.ts")));
+  } else {
+    const flat = join(EXTENSION_ROOT, "node_modules", "@types", "node");
+    if (existsSync(join(flat, "index.d.ts"))) {
+      typesNodePath = flat;
+    }
+  }
   assert.ok(
-    existsSync(typesNodePath),
+    typesNodePath,
     "@types/node IS installed (transitively via @earendil-works/pi-coding-agent)",
   );
   // Check that index.d.ts provides NodeJS types
-  const indexTypesPath = join(typesNodePath, "index.d.ts");
+  const indexTypesPath = join(typesNodePath as string, "index.d.ts");
   assert.ok(existsSync(indexTypesPath), "@types/node/index.d.ts must exist");
 });
 

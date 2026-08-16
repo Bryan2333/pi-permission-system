@@ -387,7 +387,12 @@ await runAsyncTest("Permission dialog passes timeout options and returns configu
     },
   );
 
-  assert.deepEqual(displayedOptions, { timeout: 30_000 });
+  assert.ok(
+    displayedOptions?.timeout !== undefined
+    && displayedOptions.timeout > 0
+    && displayedOptions.timeout <= 30_000,
+    "select receives the remaining timeout budget (starts at the configured value)",
+  );
   assert.equal(decision.approved, false);
   assert.equal(decision.state, "reject");
   assert.equal(decision.denialReason, "permission_timeout: no response.");

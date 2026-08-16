@@ -1505,8 +1505,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   const ensureModelOptionCompatibilityRegistered = (): Promise<void> => {
     if (!modelOptionCompatibilityRegistration) {
       modelOptionCompatibilityRegistration = import("./model-option-compatibility.js")
-        .then(({ registerModelOptionCompatibilityGuard }: { registerModelOptionCompatibilityGuard: (pi: ExtensionAPI) => void }) => {
-          registerModelOptionCompatibilityGuard(pi);
+        .then(({ registerModelOptionCompatibilityGuard }: { registerModelOptionCompatibilityGuard: (pi: ExtensionAPI) => Promise<void> }) => {
+          return registerModelOptionCompatibilityGuard(pi);
         })
         .catch(() => {
           // ignore

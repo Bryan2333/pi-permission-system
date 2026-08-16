@@ -1,10 +1,9 @@
-import {
-  getApiProvider,
-  type Api,
-  type AssistantMessageEventStream,
-  type Context as LlmContext,
-  type Model,
-  type SimpleStreamOptions,
+import type {
+  Api,
+  AssistantMessageEventStream,
+  Context as LlmContext,
+  Model,
+  SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -34,6 +33,31 @@ type GlobalWithPermissionSystemProviderGuard = typeof globalThis & {
   __piPermissionSystemModelOptionBaseStreams?: Map<string, ApiStreamSimpleDelegate>;
   __piPermissionSystemModelOptionGuardedApis?: Set<string>;
 };
+
+type ApiProviderLookup = (api: Api) => { streamSimple: ApiStreamSimpleDelegate } | undefined;
+
+let cachedApiProviderLookup: ApiProviderLookup | undefined;
+let apiProviderLookupResolved = false;
+
+// pi-ai 0.84+ moved getApiProvider to the "./compat" subpath; older versions
+// export it from the package root. Resolve lazily so both resolve at runtime.
+async function resolveApiProviderLookup(): Promise<ApiProviderLookup | undefined> {
+  if (!apiProviderLookupResolved) {
+    apiProviderLookupResolved = true;
+    for (const spec of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"] as const) {
+      try {
+        const mod = await import(spec);
+        if (typeof mod.getApiProvider === "function") {
+          cachedApiProviderLookup = mod.getApiProvider as ApiProviderLookup;
+          break;
+        }
+      } catch {
+        // Try the next module spec.
+      }
+    }
+  }
+  return cachedApiProviderLookup;
+}
 
 function getBaseApiStreams(): Map<string, ApiStreamSimpleDelegate> {
   const globalScope = globalThis as GlobalWithPermissionSystemProviderGuard;
@@ -123,7 +147,7 @@ function composeTemperatureSanitizer(
   return nextOptions;
 }
 
-function ensureModelOptionGuardForApi(pi: ExtensionAPI, api: Api): boolean {
+async function ensureModelOptionGuardForApi(pi: ExtensionAPI, api: Api): Promise<boolean> {
   const guardedApis = getGuardedApis();
   if (guardedApis.has(api)) {
     return true;
@@ -132,6 +156,10 @@ function ensureModelOptionGuardForApi(pi: ExtensionAPI, api: Api): boolean {
   const baseStreams = getBaseApiStreams();
   let baseStream = baseStreams.get(api);
   if (!baseStream) {
+    const getApiProvider = await resolveApiProviderLookup();
+    if (!getApiProvider) {
+      return false;
+    }
     const currentProvider = getApiProvider(api);
     if (!currentProvider) {
       return false;
@@ -161,8 +189,8 @@ function ensureModelOptionGuardForApi(pi: ExtensionAPI, api: Api): boolean {
   return true;
 }
 
-export function registerModelOptionCompatibilityGuard(pi: ExtensionAPI): void {
+export async function registerModelOptionCompatibilityGuard(pi: ExtensionAPI): Promise<void> {
   for (const api of GUARDED_TEMPERATURE_APIS) {
-    ensureModelOptionGuardForApi(pi, api);
+    await ensureModelOptionGuardForApi(pi, api);
   }
 }

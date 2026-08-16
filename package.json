@@ -22,7 +22,7 @@
     "build": "npm run typecheck",
     "lint": "npm run typecheck",
     "validate:artifacts": "node ./scripts/validate-artifacts.mjs",
-    "test": "bun ./tests/approved-fixes.test.ts && bun ./tests/config-modal.test.ts && bun ./tests/config-modal-theme-red.test.ts && bun ./tests/config-preservation-red.test.ts && bun ./tests/directory-resource-matching-red.test.ts && bun ./tests/edge-red-agent-name-traversal.test.ts && bun ./tests/edit-decision-deduplication-red.test.ts && bun ./tests/edit-preflight-red.test.ts && bun ./tests/edit-prompt-compaction-red.test.ts && bun ./tests/permission-persistence-red.test.ts && bun ./tests/permission-system.test.ts && bun ./tests/session-permanent-permission.test.ts && bun ./tests/shell-command-permissions.test.ts && bun ./tests/types-shims-coverage.test.ts && bun ./tests/wildcard-multiline.test.ts && bun ./tests/wildcard-redos.test.ts",
+    "test": "bun ./tests/approved-fixes.test.ts && bun ./tests/command-viewer.test.ts && bun ./tests/config-modal.test.ts && bun ./tests/config-modal-theme-red.test.ts && bun ./tests/config-preservation-red.test.ts && bun ./tests/directory-resource-matching-red.test.ts && bun ./tests/edge-red-agent-name-traversal.test.ts && bun ./tests/edit-decision-deduplication-red.test.ts && bun ./tests/edit-preflight-red.test.ts && bun ./tests/edit-prompt-compaction-red.test.ts && bun ./tests/permission-persistence-red.test.ts && bun ./tests/permission-system.test.ts && bun ./tests/session-permanent-permission.test.ts && bun ./tests/shell-command-permissions.test.ts && bun ./tests/types-shims-coverage.test.ts && bun ./tests/wildcard-multiline.test.ts && bun ./tests/wildcard-redos.test.ts",
     "test:issue23": "bun ./tests/session-permanent-permission.test.ts",
     "check": "npm run lint && npm run validate:artifacts && npm run test",
     "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process'),p=require('path');const cwd=process.cwd();const normalized=cwd.split(p.sep).join('/');if(!normalized.includes('/.pi/agent/extensions/'))process.exit(0);const s=p.resolve(cwd,'../../scripts/patch-vulnerable-deps.mjs');if(!fs.existsSync(s))process.exit(0);const r=cp.spawnSync(process.execPath,[s,'--target',cwd,'--quiet'],{stdio:'inherit'});process.exit(r.status||0)\""
@@ -62,9 +62,9 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0",
-    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0",
+    "@earendil-works/pi-ai": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0 || ^0.81.0 || ^0.82.0 || ^0.83.0 || ^0.84.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0 || ^0.81.0 || ^0.82.0 || ^0.83.0 || ^0.84.0",
+    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.78.0 || ^0.79.0 || ^0.80.0 || ^0.81.0 || ^0.82.0 || ^0.83.0 || ^0.84.0",
     "@sinclair/typebox": "^0.34.49"
   },
   "dependencies": {
@@ -73,8 +73,8 @@
     "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.75.4",
-    "@earendil-works/pi-coding-agent": "0.80.3",
-    "@earendil-works/pi-tui": "0.75.4"
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2"
   }
 }
