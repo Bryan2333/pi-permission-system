@@ -5,15 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-08-16
 
 ### Added
-- Added a scrollable "View Full Command" permission prompt viewer (keyboard ↑↓/PgUp/PgDn/Home/End), so compacted prompts can be inspected in full before deciding.
+- Added a scrollable "View Full Command" permission prompt viewer (keyboard ↑↓/PgUp/PgDn/Home/End), so compacted prompts can be inspected in full before deciding. The option is offered only when the prompt was compacted.
 - Added Bash syntax-tree analysis for control operators, pipelines, nested shell constructs, substitutions, heredocs, and redirections.
 - Added per-command permission details to Bash prompts and review logs.
 - `edit` tool calls that cannot be applied to the current file content (stale or duplicate `oldText`, missing target file, overlapping or no-op replacements, empty `oldText`) are now blocked silently with Pi's own edit-tool error text instead of prompting the user to approve a doomed edit.
 
 ### Changed
+- Permission prompts are now compacted above 18 lines or 1,500 characters (previously 32 lines / 2,200), keeping the decision dialog inside typical terminal heights; omitted content is inspected via "View Full Command".
+- The permission timeout budget now counts from the first prompt and spans viewer loops, so repeatedly opening the viewer cannot extend the auto-deny deadline; expired deadlines auto-deny before any untimed select opens.
+- The "View Full Command" overlay sizes its content window from the live terminal height on every render, so terminal resizes never clip the last lines.
+- Bumped `@earendil-works/*` dev dependencies to 0.84.2 and widened peer compatibility to `^0.84.0`; the model-option compatibility guard now resolves `getApiProvider` across pi-ai versions (`.\/compat` subpath in 0.84+, root export before).
 - Bash rules now match each executable command unit and aggregate with `deny > ask > allow`; whole compound-command patterns no longer bypass rules for nested or chained commands.
 - Bash output redirections now require an explicit matching rule instead of inheriting a plain command allow (for example, `echo *` no longer allows `echo aaaa > file`); fd duplication such as `2>&1` writes no file and stays covered by the plain rule.
 - Bash `Allow Always` approvals now match the exact original command string for the current session.

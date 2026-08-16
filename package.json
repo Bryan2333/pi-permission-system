@@ -1,6 +1,6 @@
 {
   "name": "@bryan2333/pi-permission-system",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
   "main": "./index.ts",
