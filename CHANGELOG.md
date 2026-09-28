@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-28
+
+### Added
+- Debug/review log files now rotate: once `logs/pi-permission-system-debug.jsonl` reaches 5 MB it is renamed to `pi-permission-system-debug.jsonl.1` (replacing the previous backup) and a fresh file is started, bounding log disk use at roughly 10 MB instead of growing without limit.
+
 ## [0.9.0] - 2026-08-16
 
 ### Added
