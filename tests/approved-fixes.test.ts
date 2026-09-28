@@ -214,6 +214,36 @@ await runAsyncTest("review audit entries are written when debug logging is disab
   }
 });
 
+await runAsyncTest("oversized log files rotate into a single backup and keep appending", async () => {
+  const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-log-rotation-"));
+  const logPath = join(baseDir, "debug.jsonl");
+  const logger = createPermissionSystemLogger({
+    getConfig: () => ({ ...DEFAULT_EXTENSION_CONFIG, debug: true }),
+    debugPath: logPath,
+    ensureLogsDirectory: () => undefined,
+    maxLogBytes: 200,
+  });
+
+  try {
+    for (let index = 0; index < 10; index += 1) {
+      logger.review("rotation.entry", { index, padding: "x".repeat(60) });
+    }
+    await logger.flush();
+
+    assert.equal(existsSync(`${logPath}.1`), true, "the oversized log should be rotated into a single backup");
+    const backup = readFileSync(`${logPath}.1`, "utf8");
+    const current = readFileSync(logPath, "utf8");
+    assert.match(current, /"index":9/);
+    assert.doesNotMatch(`${backup}${current}`, /"index":0/, "rotation should drop history older than the single backup");
+    assert.equal(backup.length + current.length < 1000, true, "disk use should stay bounded near the cap");
+    for (const line of `${backup}${current}`.trim().split("\n")) {
+      assert.equal(JSON.parse(line).event, "rotation.entry");
+    }
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 await runAsyncTest("forwarded permission responses cannot escape the responses directory through request ids", async () => {
   const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-forwarding-traversal-"));
   const sessionId = "approved-fixes-session";

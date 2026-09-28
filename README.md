@@ -587,6 +587,7 @@ Override logs directory: $PI_PERMISSION_SYSTEM_LOGS_DIR when set
 ```
 
 - `pi-permission-system-debug.jsonl` — disabled by default; includes troubleshooting diagnostics and permission review/audit entries with responsible agent metadata, raw prompts, raw tool-call inputs, commands, targets, and decisions
+- `pi-permission-system-debug.jsonl.1` — single rotated backup; once the active file reaches 5 MB it is renamed to `.1` (replacing the previous backup), so log disk use stays under ~10 MB
 
 ### Architecture
 

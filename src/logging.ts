@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, rename, stat } from "node:fs/promises";
 
 import {
   EXTENSION_ID,
@@ -40,22 +40,38 @@ export interface PermissionSystemLogger {
   flush: () => Promise<void>;
 }
 
+export const DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
 interface PermissionSystemLoggerOptions {
   getConfig: () => PermissionSystemExtensionConfig;
   debugPath?: string;
   ensureLogsDirectory?: () => string | undefined;
+  maxLogBytes?: number;
 }
 
 export function createPermissionSystemLogger(options: PermissionSystemLoggerOptions): PermissionSystemLogger {
   const getDebugPath = (): string => options.debugPath ?? getPermissionSystemDebugPath();
   const ensureLogsDirectory = options.ensureLogsDirectory ?? (() => ensurePermissionSystemLogsDirectory());
+  const maxLogBytes = options.maxLogBytes ?? DEFAULT_LOG_MAX_BYTES;
   let writeQueue: Promise<void> = Promise.resolve();
 
+  const rotateIfOversized = async (path: string): Promise<void> => {
+    try {
+      const { size } = await stat(path);
+      if (size >= maxLogBytes) {
+        await rename(path, `${path}.1`);
+      }
+    } catch {
+      // Missing file or a failed rotation must never block logging.
+    }
+  };
+
   const enqueueAppend = (path: string, line: string): void => {
-    writeQueue = writeQueue.then(
-      () => appendFile(path, `${line}\n`, "utf-8"),
-      () => appendFile(path, `${line}\n`, "utf-8"),
-    );
+    const append = async (): Promise<void> => {
+      await rotateIfOversized(path);
+      await appendFile(path, `${line}\n`, "utf-8");
+    };
+    writeQueue = writeQueue.then(append, append);
     void writeQueue.catch(() => {
       // Permission-system logging must never write to stdout/stderr or interrupt permission handling.
     });
